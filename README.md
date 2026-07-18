@@ -5,7 +5,7 @@ MHETranslator (Clavis AI Screen Translator) is an advanced Android application t
 ## Features
 - **On-Device OCR:** Uses Google ML Kit for fast and accurate text recognition.
 - **AI Translation:** Integrates Gemini AI and Hugging Face inference for high-quality translations.
-- **Screen Overlay:** Uses MediaProjection and a floating UI to translate text directly on the screen without leaving the active application.
+- **Crop translation:** Lets the user select an area from any app or image, then returns the recognized text to Clavis for translation.
 - **Voice Commands:** Supports wake-word detection and intuitive voice feedback (Google Assistant style).
 
 ## Setup Instructions
@@ -15,21 +15,13 @@ MHETranslator (Clavis AI Screen Translator) is an advanced Android application t
    git clone <repository_url>
    ```
 
-2. **Configure API Keys:**
-   - Create a `local.properties` file in the root directory if it doesn't exist.
-   - Add your API key to `local.properties`:
-     ```properties
-     apiKey=YOUR_API_KEY_HERE
-     ```
-   - Ensure your Android SDK path is also set correctly: `sdk.dir=/path/to/android/sdk`.
+2. **Configure providers in the app:**
+   - Open **Settings** in Clavis after installing the app.
+   - Add your Gemini API key and, optionally, your Hugging Face token.
+   - For Qwen, the Hugging Face token needs **Inference Providers** permission.
+   - Keys stay only on the device and are never stored in this repository.
 
-3. **Firebase Setup:**
-   - Go to the [Firebase Console](https://console.firebase.google.com/) and create a new project.
-   - Add an Android app with the package name `com.example.mhetranslator`.
-   - Download the `google-services.json` file.
-   - Place the `google-services.json` file inside the `app/` directory.
-
-4. **Build and Run:**
+3. **Build and run:**
    - Open the project in Android Studio.
    - Sync the project with Gradle files.
    - Build and run the application on your Android device or emulator.

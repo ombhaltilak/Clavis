@@ -32,6 +32,7 @@ class ModelDownloadActivity : ComponentActivity() {
 
         val isAlreadyDownloaded = GemmaModelManager.isModelDownloaded(this)
         val modelSizeMB = GemmaModelManager.getModelSizeMB(this)
+        val partialDownloadSizeMB = GemmaModelManager.getPartialDownloadSizeMB(this)
 
         val prefs = getSharedPreferences("mhe_prefs", MODE_PRIVATE)
         var selectedLanguage = prefs.getString("selected_language", "Hindi") ?: "Hindi"
@@ -42,6 +43,7 @@ class ModelDownloadActivity : ComponentActivity() {
             ModelDownloadScreen(
                 isAlreadyDownloaded = isAlreadyDownloaded,
                 modelSizeMB = modelSizeMB,
+                partialDownloadSizeMB = partialDownloadSizeMB,
                 currentLanguage = currentLanguage,
                 onLanguageChanged = { lang ->
                     currentLanguage = lang
@@ -84,6 +86,7 @@ class ModelDownloadActivity : ComponentActivity() {
 fun ModelDownloadScreen(
     isAlreadyDownloaded: Boolean = false,
     modelSizeMB: Long = 0,
+    partialDownloadSizeMB: Long = 0,
     currentLanguage: String = "Hindi",
     onLanguageChanged: (String) -> Unit = {},
     onStartDownload: (
@@ -176,7 +179,7 @@ fun ModelDownloadScreen(
                     is DownloadState.Ready -> "Setup AI Translation"
                     is DownloadState.Downloading -> "Downloading Clavis AI..."
                     is DownloadState.Complete -> "Ready to Translate!"
-                    is DownloadState.Error -> "Download Failed"
+                    is DownloadState.Error -> "Download paused"
                     is DownloadState.Installed -> "AI Model Settings"
                 },
                 color = Color.White,
@@ -191,9 +194,11 @@ fun ModelDownloadScreen(
                 // ── READY STATE ─────────────────────────────────────
                 is DownloadState.Ready -> {
                     Text(
-                        text = "Download the Clavis AI model for on-device translation. " +
-                            "This is a one-time download (~1 GB). " +
-                            "After this, all translations work 100% offline!",
+                        text = if (partialDownloadSizeMB > 0) {
+                            "A $partialDownloadSizeMB MB partial download was found. Tap Resume to continue from where it stopped."
+                        } else {
+                            "Download the Clavis AI model for on-device translation. This is a one-time download (~2.5 GB). After this, all translations work 100% offline!"
+                        },
                         color = Color(0xFFB0B0C0),
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
@@ -247,7 +252,7 @@ fun ModelDownloadScreen(
                         shape = RoundedCornerShape(28.dp)
                     ) {
                         Text(
-                            "⬇️  Download AI Model",
+                            if (partialDownloadSizeMB > 0) "▶  Resume AI Model Download" else "⬇️  Download AI Model",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
@@ -297,7 +302,7 @@ fun ModelDownloadScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        "Please keep the app open.\nUse Wi-Fi for faster download.",
+                        "Please keep the app open.\nIf interrupted, your download progress is saved for Resume.",
                         color = Color(0xFF707090),
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center,
@@ -373,7 +378,7 @@ fun ModelDownloadScreen(
                         ),
                         shape = RoundedCornerShape(28.dp)
                     ) {
-                        Text("🔄  Retry Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("▶  Resume Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))

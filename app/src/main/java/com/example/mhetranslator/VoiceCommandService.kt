@@ -26,8 +26,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import java.util.Locale
@@ -54,7 +52,6 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    private var engine: Engine? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -74,7 +71,7 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
         initSpeechRecognizer()
         showFloatingButton()
-        serviceScope.launch(Dispatchers.IO) { initEngine() }
+        // serviceScope.launch(Dispatchers.IO) { initEngine() }
     }
 
     override fun onDestroy() {
@@ -85,7 +82,7 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
         removeResponseBubble()
         speechRecognizer?.destroy()
         tts?.stop(); tts?.shutdown()
-        engine?.close()
+        // engine?.close()
         serviceScope.cancel()
     }
 
@@ -116,8 +113,7 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
     }
 
-    // ── Engine ───────────────────────────────────────────────────
-
+    /*
     private fun initEngine() {
         if (!GemmaModelManager.isModelDownloaded(this)) return
         try {
@@ -126,6 +122,7 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
             eng.initialize(); engine = eng
         } catch (_: Exception) {}
     }
+    */
 
     // ── Notification ─────────────────────────────────────────────
 
@@ -241,46 +238,17 @@ class VoiceCommandService : Service(), TextToSpeech.OnInitListener {
         updateMicState()
         showResponseBubble("🎤 \"$spokenText\"\n\nProcessing...")
 
-        val eng = engine
-        if (eng == null) {
-            keywordFallback(spokenText)
-            return
-        }
-
         serviceScope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
-                    askGemma(eng, spokenText)
+                    GeminiApi.classifyIntent(spokenText)
                 }
                 handleResponse(response.trim(), spokenText)
             } catch (e: Exception) {
+                Log.e(TAG, "Gemini intent classification failed: ${e.message}")
                 keywordFallback(spokenText)
             }
         }
-    }
-
-    private suspend fun askGemma(eng: Engine, userText: String): String {
-        val prompt = """You are Clavis, a voice assistant in a translation app.
-
-COMMANDS (output ONLY the command tag, nothing else):
-LIVE_TRANSLATE - translate screen text
-STOP_TRANSLATE - stop translation
-CROP_TRANSLATE - crop area to translate
-CHANGE_LANG:Hindi - switch to Hindi
-CHANGE_LANG:Marathi - switch to Marathi
-DICTIONARY:word - look up word meaning
-OPEN_SETTINGS - open settings
-
-For general questions, start with ANSWER: and give a 1-2 sentence reply.
-If user mentions language + translate, output CHANGE_LANG then LIVE_TRANSLATE.
-
-User: "$userText"
-Response:"""
-        val sb = StringBuilder()
-        eng.createConversation().use { c ->
-            c.sendMessageAsync(prompt).collect { sb.append(it) }
-        }
-        return sb.toString().trim()
     }
 
     private fun handleResponse(response: String, original: String) {

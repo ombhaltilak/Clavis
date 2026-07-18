@@ -7,10 +7,14 @@ import android.text.TextPaint
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.Text
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
+import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import com.google.ai.edge.litertlm.Engine
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -45,11 +49,48 @@ object TranslationPipeline {
         var translatedText: String = ""
     )
 
+    data class ExtractedTranslation(
+        val sourceText: String,
+        val translatedText: String
+    )
+
+    suspend fun extractAndTranslate(
+        originalBitmap: Bitmap,
+        cropRect: androidx.compose.ui.geometry.Rect,
+        @Suppress("UNUSED_PARAMETER") engine: Any? = null,
+        targetLanguage: String,
+        useOnline: Boolean,
+        onStatus: (String) -> Unit
+    ): ExtractedTranslation = withContext(Dispatchers.Default) {
+        onStatus("Detecting text in selected area...")
+        val blocks = runOCR(originalBitmap)
+        val cropBounds = Rect(
+            cropRect.left.toInt().coerceIn(0, originalBitmap.width - 1),
+            cropRect.top.toInt().coerceIn(0, originalBitmap.height - 1),
+            cropRect.right.toInt().coerceIn(1, originalBitmap.width),
+            cropRect.bottom.toInt().coerceIn(1, originalBitmap.height)
+        )
+        val selected = blocks.filter {
+            Rect.intersects(it.bounds, cropBounds) || cropBounds.contains(it.bounds)
+        }.toMutableList()
+        if (selected.isEmpty()) {
+            onStatus("No text found in the selected area")
+            return@withContext ExtractedTranslation("", "")
+        }
+
+        onStatus("")
+        ExtractedTranslation(
+            sourceText = selected.joinToString("\n") { it.text },
+            translatedText = ""
+        )
+    }
+
     suspend fun process(
         originalBitmap: Bitmap,
         cropRect: androidx.compose.ui.geometry.Rect,
-        engine: Engine?,
+        @Suppress("UNUSED_PARAMETER") engine: Any? = null,  // Kept for signature compat, unused
         targetLanguage: String,
+        useOnline: Boolean,
         onStatus: (String) -> Unit
     ): Bitmap = withContext(Dispatchers.Default) {
 
@@ -95,7 +136,7 @@ object TranslationPipeline {
 
         // ── Stage 3: Translate ──────────────────────────────────────
         onStatus("Stage 3/5: Translating...")
-        translateBlocks(textBlocks, engine, targetLanguage)
+        translateBlocks(textBlocks, engine, targetLanguage, useOnline)
 
         // ── Stage 4+5: Typography-Aware Rendering ──────────────────
         onStatus("Stage 4/5: Rendering text...")
@@ -109,35 +150,51 @@ object TranslationPipeline {
     // Stage 1: OCR
     // ═══════════════════════════════════════════════════════════════
 
-    private suspend fun runOCR(bitmap: Bitmap): MutableList<TextBlock> =
-        withContext(Dispatchers.IO) {
-            try {
-                val image = InputImage.fromBitmap(bitmap, 0)
-                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                val task = recognizer.process(image)
-                com.google.android.gms.tasks.Tasks.await(task)
-                val result = task.result ?: return@withContext mutableListOf()
+    private enum class OcrScript { LATIN, DEVANAGARI, CHINESE, JAPANESE, KOREAN }
 
-                val blocks = mutableListOf<TextBlock>()
-                for (tb in result.textBlocks) {
-                    for (line in tb.lines) {
-                        val box = line.boundingBox ?: continue
-                        if (box.width() < 15 || box.height() < 8) continue
-                        // Convert ML Kit Rect to android.graphics.Rect
-                        val androidRect = android.graphics.Rect(
-                            box.left, box.top, box.right, box.bottom
-                        )
-                        blocks.add(TextBlock(
-                            text = line.text, bounds = androidRect,
-                            textColor = Color.WHITE, bgColor = Color.BLACK
-                        ))
-                    }
-                }
-                blocks
-            } catch (e: Exception) {
-                Log.e(TAG, "OCR: ${e.message}"); mutableListOf()
-            }
+    private suspend fun runOCR(bitmap: Bitmap): MutableList<TextBlock> = withContext(Dispatchers.IO) {
+        try {
+            val image = InputImage.fromBitmap(bitmap, 0)
+            val candidates = listOfNotNull(
+                recognize(image, OcrScript.LATIN, TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)),
+                recognize(image, OcrScript.DEVANAGARI, TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())),
+                recognize(image, OcrScript.CHINESE, TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())),
+                recognize(image, OcrScript.JAPANESE, TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())),
+                recognize(image, OcrScript.KOREAN, TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()))
+            )
+            val result = selectBestOcrResult(candidates) ?: return@withContext mutableListOf()
+            result.textBlocks.flatMap { block -> block.lines }.mapNotNull { line ->
+                val box = line.boundingBox ?: return@mapNotNull null
+                if (box.width() < 15 || box.height() < 8) return@mapNotNull null
+                TextBlock(line.text, android.graphics.Rect(box.left, box.top, box.right, box.bottom), Color.WHITE, bgColor = Color.BLACK)
+            }.toMutableList()
+        } catch (error: Exception) {
+            Log.e(TAG, "OCR failed", error)
+            mutableListOf()
         }
+    }
+
+    private fun recognize(image: InputImage, script: OcrScript, recognizer: TextRecognizer): Pair<OcrScript, Text>? =
+        try { script to com.google.android.gms.tasks.Tasks.await(recognizer.process(image)) }
+        catch (error: Exception) { Log.w(TAG, "OCR recognizer unavailable", error); null }
+        finally { recognizer.close() }
+
+    private fun selectBestOcrResult(candidates: List<Pair<OcrScript, Text>>): Text? {
+        val native = candidates.filter { it.first != OcrScript.LATIN }.maxByOrNull { nativeScriptScore(it.second.text, it.first) }
+        if (native != null && nativeScriptScore(native.second.text, native.first) > 0) return native.second
+        return candidates.firstOrNull { it.first == OcrScript.LATIN }?.second ?: candidates.maxByOrNull { it.second.text.length }?.second
+    }
+
+    private fun nativeScriptScore(text: String, script: OcrScript): Int = text.sumOf { char ->
+        val code = char.code
+        when (script) {
+            OcrScript.DEVANAGARI -> if (code in 0x0900..0x097F) 1 else 0
+            OcrScript.CHINESE -> if (code in 0x4E00..0x9FFF) 1 else 0
+            OcrScript.JAPANESE -> when { code in 0x3040..0x30FF -> 3; code in 0x4E00..0x9FFF -> 1; else -> 0 }
+            OcrScript.KOREAN -> if (code in 0xAC00..0xD7AF) 1 else 0
+            OcrScript.LATIN -> 0
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // Stage 1b: Deep Typography Analysis
@@ -237,14 +294,15 @@ object TranslationPipeline {
             )
             paint.shader = shader
             paint.style = Paint.Style.FILL
-            canvas.drawRect(RectF(dilated), paint)
+            removeTextPixels(bitmap, dilated, block)
             paint.shader = null
 
             // Feather all 4 edges for seamless blending
-            featherRect(bitmap, dilated, bw, bh)
+            // Keep surrounding pixels unchanged; only detected text ink is cleaned.
         }
     }
 
+    private fun removeTextPixels(bitmap: Bitmap, area: Rect, block: TextBlock) { val h = area.height().coerceAtLeast(1); for (y in area.top until area.bottom) { val bg = blendColors(block.bgGradientTop, block.bgGradientBottom, (y - area.top).toFloat() / h); for (x in area.left until area.right) { val p = bitmap.getPixel(x, y); val fg = abs(Color.red(p) - Color.red(block.textColor)) + abs(Color.green(p) - Color.green(block.textColor)) + abs(Color.blue(p) - Color.blue(block.textColor)); val bd = abs(Color.red(p) - Color.red(bg)) + abs(Color.green(p) - Color.green(bg)) + abs(Color.blue(p) - Color.blue(bg)); if (abs(luminance(p) - luminance(bg)) > 0.12f && fg <= bd * 1.15f) bitmap.setPixel(x, y, blendColors(p, bg, 0.85f)) } } }
     /**
      * Feather all edges of a rect by blending inpainted pixels
      * with surrounding original pixels using distance-based alpha.
@@ -293,59 +351,18 @@ object TranslationPipeline {
     // ═══════════════════════════════════════════════════════════════
 
     private suspend fun translateBlocks(
-        blocks: MutableList<TextBlock>, engine: Engine?, targetLanguage: String
-    ) = withContext(Dispatchers.Default) {  // Use Default for better parallelism
-        // Use TranslationManager which handles all sources with priority
-        // Note: TranslationManager is initialized in activities, so we need to handle it differently here
-        
-        val texts = blocks.map { it.text }
-        
-        // Try Hugging Face API first (highest quality)
+        blocks: MutableList<TextBlock>, @Suppress("UNUSED_PARAMETER") engine: Any?, targetLanguage: String, useOnline: Boolean
+    ) = withContext(Dispatchers.IO) {
+        // ── Using Gemini API (online) ──
         try {
-            val translations = HuggingFaceApi.translateBatch(texts, targetLanguage)
+            val texts = blocks.map { it.text }
+            val translations = if (useOnline) GeminiApi.translateLines(texts, targetLanguage) else OfflineTranslationApi.translateLines(texts, targetLanguage)
             blocks.forEachIndexed { i, b ->
-                b.translatedText = translations.getOrElse(i) { b.text }
-                    .trim()
-                    .ifBlank { b.text }
+                b.translatedText = translations.getOrElse(i) { b.text }.trim().ifBlank { b.text }
             }
-            Log.d(TAG, "Hugging Face API translation successful for ${blocks.size} blocks")
-            return@withContext
+            Log.d(TAG, "Gemini API translation successful for ${blocks.size} blocks")
         } catch (e: Exception) {
-            Log.e(TAG, "Hugging Face API translation failed: ${e.message}")
-        }
-        
-        // Fallback to Gemma if available
-        if (engine != null) {
-            try {
-                val numbered = blocks.mapIndexed { i, b -> "${i + 1}. ${b.text}" }.joinToString("\n")
-                val prompt = """You are a precise translation assistant. 
-Translate each numbered line COMPLETELY into $targetLanguage using only Devanagari script.
-
-IMPORTANT RULES:
-1. Translate EVERYTHING into $targetLanguage - do NOT keep any English words
-2. Use only Devanagari script for ALL output
-3. Output exactly ${blocks.size} numbered lines
-4. Only output the translations, no explanations, no extra text
-5. Be accurate and natural in $targetLanguage
-
-$numbered"""
-                val sb = StringBuilder()
-                engine.createConversation().use { c ->
-                    c.sendMessageAsync(prompt).collect { sb.append(it) }
-                }
-                val lines = sb.toString().trim().lines()
-                    .map { it.trim() }.filter { it.isNotBlank() }
-                    .map { it.replace(Regex("""^\d+\.\s*"""), "") }
-                blocks.forEachIndexed { i, b ->
-                    b.translatedText = lines.getOrElse(i) { b.text }
-                }
-                Log.d(TAG, "Gemma translation successful for ${blocks.size} blocks")
-            } catch (e: Exception) {
-                Log.e(TAG, "Gemma translation failed: ${e.message}")
-                for (b in blocks) b.translatedText = b.text
-            }
-        } else {
-            // No engine, no API - use original text
+            Log.e(TAG, "Gemini translation failed: ${e.message}")
             for (b in blocks) b.translatedText = b.text
         }
     }

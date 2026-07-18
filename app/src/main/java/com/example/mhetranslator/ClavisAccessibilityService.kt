@@ -14,8 +14,6 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import java.util.concurrent.Executor
@@ -49,8 +47,6 @@ class ClavisAccessibilityService : AccessibilityService() {
             instance?.removeOverlay()
         }
     }
-
-    private var engine: Engine? = null
     private var overlayView: ScreenTranslationOverlay? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = Handler(Looper.getMainLooper())
@@ -58,10 +54,12 @@ class ClavisAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        OfflineTranslationApi.initialize(this)
         Log.d(TAG, "Accessibility service connected")
-        serviceScope.launch(Dispatchers.IO) { initEngine() }
+        // serviceScope.launch(Dispatchers.IO) { initEngine() }
     }
 
+    /*
     private fun initEngine() {
         if (!GemmaModelManager.isModelDownloaded(this)) return
         try {
@@ -75,6 +73,7 @@ class ClavisAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Engine init failed: ${e.message}")
         }
     }
+    */
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() { removeOverlay() }
@@ -84,7 +83,7 @@ class ClavisAccessibilityService : AccessibilityService() {
         instance = null
         isTranslating = false
         removeOverlay()
-        engine?.close()
+        // engine?.close()
         serviceScope.cancel()
     }
 
@@ -159,22 +158,13 @@ class ClavisAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                // 3. Translate all text (one line per node)
+                // 3. Translate all text
                 val prefs = getSharedPreferences("mhe_prefs", MODE_PRIVATE)
                 val targetLang = prefs.getString("selected_language", "Hindi") ?: "Hindi"
+                val provider = prefs.getString("translation_provider", "gemini") ?: "gemini"
 
-                // Build indexed text for translation
-                val allText = textNodes.mapIndexed { i, n -> "${i + 1}. ${n.text}" }
-                    .joinToString("\n")
-
-                val translated = translateText(allText, targetLang, textNodes.size)
-                    ?: run {
-                        screenshot?.recycle()
-                        return@launch
-                    }
-
-                // 4. Parse translated lines and map back
-                val translatedLines = parseTranslatedLines(translated, textNodes.size)
+                val textsToTranslate = textNodes.map { it.text }
+                val translatedLines = when (provider) { "offline" -> OfflineTranslationApi.translateLines(textsToTranslate, targetLang); else -> OnlineTranslationApi.translateLines(textsToTranslate, targetLang, provider) }
 
                 val overlayNodes = textNodes.mapIndexed { index, node ->
                     TranslatedTextNode(
@@ -290,9 +280,7 @@ class ClavisAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Translate text: one line per text node.
-     */
+    /*
     private suspend fun translateText(text: String, targetLanguage: String, nodeCount: Int): String? {
         val eng = engine ?: run {
             Log.w(TAG, "Engine not loaded")
@@ -322,9 +310,6 @@ $text"""
         }
     }
 
-    /**
-     * Parse numbered translation output back into individual lines.
-     */
     private fun parseTranslatedLines(raw: String, expectedCount: Int): List<String> {
         val lines = raw.lines()
             .map { it.trim() }
@@ -335,6 +320,7 @@ $text"""
             }
         return lines
     }
+    */
 
     private fun showOverlay(nodes: List<TranslatedTextNode>) {
         removeOverlay()

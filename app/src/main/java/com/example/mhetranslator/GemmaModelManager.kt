@@ -8,29 +8,18 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Manages the Gemma model lifecycle:
- * - Checks if model is already downloaded
- * - Downloads from Hugging Face using the provided access token
- * - Reports progress during download
- * - Stores model in app's internal files directory
- */
+/** Manages the optional on-device Gemma model and resumable downloads. */
 object GemmaModelManager {
 
     private const val MODEL_FILENAME = "gemma-4-e2b-it.litertlm"
-
-    // HuggingFace direct download URL (native Android variant, 2.4 GB)
+    private const val FALLBACK_MODEL_SIZE_BYTES = 2_000_000_000L
     private const val MODEL_URL =
         "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
-    private const val HF_TOKEN = "YOUR_HF_TOKEN_HERE"
 
-    fun getModelPath(context: Context): String {
-        return File(context.filesDir, MODEL_FILENAME).absolutePath
-    }
+    fun getModelPath(context: Context): String = File(context.filesDir, MODEL_FILENAME).absolutePath
 
     fun isModelDownloaded(context: Context): Boolean {
         val file = File(context.filesDir, MODEL_FILENAME)
-        // Ensure file exists and is reasonably large (> 1GB)
         return file.exists() && file.length() > 500_000_000L
     }
 
@@ -39,10 +28,14 @@ object GemmaModelManager {
         return if (file.exists()) file.length() / (1024 * 1024) else 0
     }
 
+    fun getPartialDownloadSizeMB(context: Context): Long {
+        val file = File(context.filesDir, "$MODEL_FILENAME.tmp")
+        return if (file.exists()) file.length() / (1024 * 1024) else 0
+    }
+
     /**
-     * Downloads the Gemma model using the GitHub Release URL.
-     * @param onProgress callback with (bytesDownloaded, totalBytes, percentComplete)
-     * @return Result with success or failure
+     * Downloads Gemma to a .tmp file. If a previous download was interrupted,
+     * the remaining bytes are requested with HTTP Range and appended to it.
      */
     suspend fun downloadModel(
         context: Context,
@@ -50,70 +43,82 @@ object GemmaModelManager {
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         val outputFile = File(context.filesDir, MODEL_FILENAME)
         val tempFile = File(context.filesDir, "$MODEL_FILENAME.tmp")
+        var connection: HttpURLConnection? = null
 
         try {
-            val url = URL(MODEL_URL)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 30_000
-            connection.readTimeout = 60_000
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("User-Agent", "ClavisTranslator/1.0")
-            connection.setRequestProperty("Authorization", "Bearer $HF_TOKEN")
-
+            val existingBytes = tempFile.takeIf { it.exists() }?.length() ?: 0L
+            connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 30_000
+                readTimeout = 60_000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "ClavisTranslator/1.0")
+                if (existingBytes > 0L) setRequestProperty("Range", "bytes=$existingBytes-")
+                ApiKeyStore.get("huggingface").takeIf { it.isNotBlank() }?.let { token ->
+                    setRequestProperty("Authorization", "Bearer $token")
+                }
+            }
             connection.connect()
 
             val responseCode = connection.responseCode
+            if (responseCode == 416) {
+                val expectedSize = connection.getHeaderField("Content-Range")
+                    ?.substringAfter("*/")?.toLongOrNull()
+                if (existingBytes > 0L && expectedSize == existingBytes && tempFile.renameTo(outputFile)) {
+                    onProgress(existingBytes, existingBytes, 100)
+                    return@withContext Result.success(true)
+                }
+                return@withContext Result.failure(Exception("Saved download cannot be resumed. Delete the partial model and try again."))
+            }
             if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_PARTIAL) {
-                connection.disconnect()
-                return@withContext Result.failure(
-                    Exception("Download failed: HTTP $responseCode")
-                )
+                return@withContext Result.failure(Exception("Download failed: HTTP $responseCode. Progress was kept for retry."))
             }
 
-            val totalBytes = connection.contentLengthLong.let {
-                if (it > 0) it else 2_000_000_000L // Fallback to 2GB if unknown
+            // A 206 response confirms the server honored Range. If it returned
+            // 200 instead, it ignored Range, so safely restart the partial file.
+            val append = existingBytes > 0L && responseCode == HttpURLConnection.HTTP_PARTIAL
+            val startBytes = if (append) existingBytes else 0L
+            if (!append && tempFile.exists()) tempFile.delete()
+
+            val responseLength = connection.contentLengthLong
+            val totalBytes = when {
+                responseLength > 0L -> startBytes + responseLength
+                else -> maxOf(FALLBACK_MODEL_SIZE_BYTES, startBytes)
             }
+            var downloadedBytes = startBytes
+            onProgress(downloadedBytes, totalBytes, ((downloadedBytes * 100) / totalBytes).toInt().coerceAtMost(99))
 
-            val inputStream = connection.inputStream
-            val outputStream = FileOutputStream(tempFile)
-
-            val buffer = ByteArray(65536) // 64KB buffer for faster download
-            var bytesDownloaded = 0L
-            var bytesRead: Int
-
-            inputStream.use { input ->
-                outputStream.use { output ->
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
+            FileOutputStream(tempFile, append).use { output ->
+                connection.inputStream.use { input ->
+                    val buffer = ByteArray(65_536)
+                    while (true) {
+                        val bytesRead = input.read(buffer)
+                        if (bytesRead == -1) break
                         output.write(buffer, 0, bytesRead)
-                        bytesDownloaded += bytesRead
-
-                        val percent = if (totalBytes > 0) {
-                            ((bytesDownloaded * 100) / totalBytes).toInt().coerceAtMost(99)
-                        } else 0
-
-                        onProgress(bytesDownloaded, totalBytes, percent)
+                        downloadedBytes += bytesRead
+                        val percent = ((downloadedBytes * 100) / totalBytes).toInt().coerceAtMost(99)
+                        onProgress(downloadedBytes, totalBytes, percent)
                     }
                 }
             }
 
-            connection.disconnect()
-
-            // Rename temp file to final
-            if (tempFile.exists()) {
-                outputFile.delete()
-                tempFile.renameTo(outputFile)
+            if (outputFile.exists() && !outputFile.delete()) {
+                return@withContext Result.failure(Exception("Could not replace the existing model."))
             }
-
-            onProgress(bytesDownloaded, bytesDownloaded, 100)
+            if (!tempFile.renameTo(outputFile)) {
+                return@withContext Result.failure(Exception("Download finished but could not finalize it. Retry to resume."))
+            }
+            onProgress(downloadedBytes, downloadedBytes, 100)
             Result.success(true)
-
         } catch (e: Exception) {
-            tempFile.delete()
-            Result.failure(e)
+            // Keep the .tmp file: pressing Resume continues from this byte offset.
+            Result.failure(Exception("${e.message ?: "Download interrupted"}. Progress was kept; tap Resume to continue.", e))
+        } finally {
+            connection?.disconnect()
         }
     }
 
+    /** Explicitly removes both the completed model and any resumable partial download. */
     fun deleteModel(context: Context) {
         File(context.filesDir, MODEL_FILENAME).delete()
         File(context.filesDir, "$MODEL_FILENAME.tmp").delete()

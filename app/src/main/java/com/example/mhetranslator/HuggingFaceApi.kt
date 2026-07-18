@@ -3,146 +3,72 @@ package com.example.mhetranslator
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/**
- * Hugging Face Inference API Client for Translation
- * 
- * Uses the FREE tier (5000 requests/month)
- * Supports EN->HI and EN->MR translation
- * 
- * Token: YOUR_HF_TOKEN_HERE
- */
+/** Hugging Face Inference Providers fallback using Qwen3. */
 object HuggingFaceApi {
-    private const val TAG = "HFApi"
-    private const val BASE_URL = "https://api-inference.huggingface.co"
-    private const val TIMEOUT_SECONDS = 30L
-    
-    // FREE API token - provided by user
-    private const val API_TOKEN = "YOUR_HF_TOKEN_HERE"
-    
-    private val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build()
-    }
-    
+    private const val TAG = "HuggingFaceApi"
+    private const val ENDPOINT = "https://router.huggingface.co/v1/chat/completions"
+    private const val MODEL = "Qwen/Qwen3-32B"
+    private val apiKey get() = ApiKeyStore.get("huggingface")
     private val gson = Gson()
     private val jsonMediaType = "application/json".toMediaType()
-    
-    // Model endpoints
-    private val translationModels = mapOf(
-        "Hindi" to "Helsinki-NLP/opus-mt-en-hi",
-        "Marathi" to "Helsinki-NLP/opus-mt-en-mr"
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .build()
+
+    val isConfigured: Boolean get() = apiKey.isNotBlank()
+
+    private data class Message(val role: String, val content: String)
+    private data class ChatRequest(
+        val model: String,
+        val messages: List<Message>,
+        val temperature: Double,
+        @SerializedName("max_tokens") val maxTokens: Int
     )
-    
-    data class TranslationRequest(
-        val inputs: String,
-        @SerializedName("parameters")
-        val params: Map<String, String>? = null
-    )
-    
-    data class TranslationResponse(
-        @SerializedName("translation_text")
-        val translationText: String? = null,
-        @SerializedName("generated_text")
-        val generatedText: String? = null,
-        @SerializedName("error")
-        val error: String? = null
-    )
-    
-    /**
-     * Translate text using Hugging Face API
-     * 
-     * @param text Text to translate
-     * @param targetLanguage "Hindi" or "Marathi"
-     * @return Translated text in Devanagari script
-     */
-    suspend fun translate(
-        text: String,
-        targetLanguage: String
-    ): String {
+    private data class ChatResponse(val choices: List<Choice> = emptyList())
+    private data class Choice(val message: Message? = null)
+
+    suspend fun generate(prompt: String): String {
+        if (!isConfigured) return ""
         return try {
-            val modelId = translationModels[targetLanguage]
-                ?: throw IllegalArgumentException("Unsupported language: $targetLanguage")
-            
-            val translationRequest = TranslationRequest(
-                inputs = text,
-                params = mapOf("temperature" to "0.7", "max_length" to "512")
-            )
-            
-            val requestBody = gson.toJson(translationRequest).toRequestBody(jsonMediaType)
-            
-            val httpRequest = Request.Builder()
-                .url("$BASE_URL/models/$modelId")
-                .header("Authorization", "Bearer $API_TOKEN")
+            val body = gson.toJson(ChatRequest(
+                model = MODEL,
+                messages = listOf(
+                    Message("system", "You are a precise Indian-language translation assistant. Follow the user instructions exactly. Return only the requested translation."),
+                    Message("user", prompt)
+                ),
+                temperature = 0.2,
+                maxTokens = 2048
+            )).toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(ENDPOINT)
+                .header("Authorization", "Bearer $apiKey")
                 .header("Content-Type", "application/json")
-                .post(requestBody)
+                .post(body)
                 .build()
-            
-            val response = client.newCall(httpRequest).execute()
-            
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string()
-                Log.e(TAG, "API Error ${response.code}: $errorBody")
-                throw IOException("API request failed: ${response.code} - $errorBody")
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Qwen request failed ${response.code}: $responseBody")
+                    return ""
+                }
+                gson.fromJson(responseBody, ChatResponse::class.java)
+                    ?.choices?.firstOrNull()?.message?.content?.trim().orEmpty()
             }
-            
-            val responseBody = response.body?.string()
-            val translationResponse = gson.fromJson(responseBody, Array<TranslationResponse>::class.java)
-            
-            // Try different response formats
-            translationResponse.firstOrNull()?.let { resp ->
-                resp.translationText ?: resp.generatedText ?: resp.error ?: ""
-            } ?: responseBody ?: ""
-            
         } catch (e: Exception) {
-            Log.e(TAG, "Translation failed: ${e.message}", e)
-            // Fallback to empty string, caller should handle
+            Log.e(TAG, "Qwen fallback failed", e)
             ""
         }
     }
-    
-    /**
-     * Translate multiple texts (calls translate() for each text)
-     * Note: HF API doesn't support true batch, so we call sequentially
-     */
-    suspend fun translateBatch(
-        texts: List<String>,
-        targetLanguage: String
-    ): List<String> {
-        return texts.map { text ->
-            try {
-                translate(text, targetLanguage)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to translate text: ${e.message}")
-                ""
-            }
-        }
-    }
-    
-    /**
-     * Check API token validity and quota
-     */
-    suspend fun checkTokenValidity(): Boolean {
-        return try {
-            val httpRequest = Request.Builder()
-                .url("$BASE_URL/whoami-v2")
-                .header("Authorization", "Bearer $API_TOKEN")
-                .get()
-                .build()
-            
-            val response = client.newCall(httpRequest).execute()
-            response.isSuccessful
-        } catch (e: Exception) {
-            Log.e(TAG, "Token check failed: ${e.message}")
-            false
-        }
-    }
+    suspend fun translate(text: String, targetLanguage: String): String = generate("Translate the following text to $targetLanguage. For Hindi, output true Hinglish, never pure Hindi: retain 30-50% familiar content words in English Latin letters and use Devanagari only for Hindi connector words. For Marathi, retain familiar English content words in Latin letters. Return only the translation.\n\nText: $text")
+
+    suspend fun translateLines(lines: List<String>, targetLanguage: String): List<String> = lines.map { translate(it, targetLanguage).ifBlank { it } }
+
 }

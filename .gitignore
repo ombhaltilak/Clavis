@@ -14,3 +14,17 @@
 .cxx
 local.properties
 app/google-services.json
+
+# Local IDE and Kotlin state
+/.idea/
+/.kotlin/
+
+# Credentials and signing material
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+.env
+.env.*
+secrets.properties

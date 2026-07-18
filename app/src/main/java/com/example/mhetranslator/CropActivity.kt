@@ -29,8 +29,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import com.image.cropview.CropType
 import com.image.cropview.EdgeType
 import com.image.cropview.ImageCropView
@@ -42,9 +40,7 @@ import kotlinx.coroutines.launch
  * CropActivity with ImageCropView for improved UI
  * Uses ImageCropView library for rectangle selection
  */
-class CropActivity : ComponentActivity() {
-
-    private var engine: Engine? = null
+class CropActivity : ComponentActivity() {  // Commented out — using Gemini API
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,13 +52,12 @@ class CropActivity : ComponentActivity() {
             return
         }
 
-        // Initialize Gemma 4 E2B model in background
-        lifecycleScope.launch(Dispatchers.IO) {
-            initGemmaModel()
-        }
+        // Offline Gemma init commented out — using Gemini API
+        // lifecycleScope.launch(Dispatchers.IO) { initGemmaModel() }
 
         setContent {
             var isLoading by remember { mutableStateOf(false) }
+            var sourceText by remember { mutableStateOf("") }
             var translatedText by remember { mutableStateOf("") }
             var statusMessage by remember { mutableStateOf("") }
             var translationRect by remember { mutableStateOf<ComposeRect?>(null) }
@@ -71,9 +66,15 @@ class CropActivity : ComponentActivity() {
 
             val prefs = getSharedPreferences("mhe_prefs", MODE_PRIVATE)
             val targetLanguage = prefs.getString("selected_language", "Hindi") ?: "Hindi"
+            val useOnline = prefs.getString("translation_provider", "online") == "online"
 
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                    if (translatedText.isNotBlank()) {
+                        InAppTranslationResult(sourceText, translatedText, targetLanguage,
+                            onSelectAgain = { sourceText = ""; translatedText = "" },
+                            onClose = { finish() })
+                    } else {
                     ImprovedCropScreen(
                         bitmap = bitmap,
                         compositedBitmap = compositedBitmap,
@@ -88,20 +89,23 @@ class CropActivity : ComponentActivity() {
                             compositedBitmap = null
                             translationRect = null
                             lifecycleScope.launch {
-                                val result = TranslationPipeline.process(
+                                val result = TranslationPipeline.extractAndTranslate(
                                     originalBitmap = bitmap,
                                     cropRect = composeRect,
-                                    engine = engine,
+                                    engine = null,
                                     targetLanguage = targetLanguage,
+                                    useOnline = useOnline,
                                     onStatus = { status ->
                                         statusMessage = status
                                     }
                                 )
-                                compositedBitmap = result
-                                isLoading = false
-                                statusMessage = ""
-                                showTranslation = true
-                                translationRect = composeRect
+                                if (result.sourceText.isBlank()) {
+                                    isLoading = false
+                                    statusMessage = "No text found in the selected area"
+                                } else {
+                                    startActivity(android.content.Intent(this@CropActivity, MainActivity::class.java).putExtra("captured_source", result.sourceText))
+                                    finish()
+                                }
                             }
                         },
                         onSelectAgain = {
@@ -116,28 +120,27 @@ class CropActivity : ComponentActivity() {
             }
         }
     }
+    }
 
+    /* Offline model init — commented out, using Gemini API
     private fun initGemmaModel() {
-        if (!GemmaModelManager.isModelDownloaded(this)) {
-            return
-        }
+        if (!GemmaModelManager.isModelDownloaded(this)) return
         try {
             val modelPath = GemmaModelManager.getModelPath(this)
             val config = EngineConfig(modelPath = modelPath)
             val eng = Engine(config)
             eng.initialize()
             engine = eng
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
+    */
 
     override fun onDestroy() {
         super.onDestroy()
-        engine?.close()
+        // engine?.close()  // No offline engine to close
     }
     
-    private fun findCropRect(original: Bitmap, cropped: Bitmap): ComposeRect {
+    internal fun findCropRect(original: Bitmap, cropped: Bitmap): ComposeRect {
         val ow = original.width
         val oh = original.height
         val cw = cropped.width
@@ -177,6 +180,27 @@ class CropActivity : ComponentActivity() {
 }
 
 @Composable
+private fun InAppTranslationResult(sourceText: String, translatedText: String, targetLanguage: String, onSelectAgain: () -> Unit, onClose: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize()
+            .background(Color(0xFF10141C))
+            .padding(24.dp)
+    ) {
+        Text("Translation", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        Text("SELECTED TEXT", color = Color(0xFF8B9BB4), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(sourceText, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), color = Color(0xFFE5E7EB), fontSize = 17.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("IN $targetLanguage", color = Color(0xFF5EEAD4), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(translatedText, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(28.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = onSelectAgain, modifier = Modifier.weight(1f)) { Text("Select again") }
+            Button(onClick = onClose, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2DD4BF), contentColor = Color.Black)) { Text("Done", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+@Composable
 fun ImprovedCropScreen(
     bitmap: Bitmap,
     compositedBitmap: Bitmap?,
@@ -200,42 +224,9 @@ fun ImprovedCropScreen(
             contentScale = ContentScale.FillBounds
         )
         
-        // Selection mode - use ImageCropView
+        // Adjustable selection: drag a large corner handle to resize, or drag inside to move.
         if (compositedBitmap == null) {
-            val imageCrop = rememberSaveableImageCrop(bitmap)
-            
-            ImageCropView(
-                imageCrop = imageCrop,
-                modifier = Modifier.fillMaxSize(),
-                // Google Translate-style colors
-                guideLineColor = Color(0xFF00E5FF),  // Cyan accent
-                guideLineWidth = 2.dp,
-                edgeCircleSize = 12.dp,  // Larger circular handles
-                showGuideLines = true,  // Rule-of-thirds grid
-                cropType = CropType.FREE_STYLE,
-                edgeType = EdgeType.CIRCULAR,
-                enableZoom = true
-            )
-            
-            // Translate button - aligned to bottom
-            Button(
-                onClick = {
-                    val croppedBitmap = imageCrop.onCrop(true)
-                    val rect = (localContext as? CropActivity)?.findCropRect(bitmap, croppedBitmap) 
-                        ?: ComposeRect(0f, 0f, croppedBitmap.width.toFloat(), croppedBitmap.height.toFloat())
-                    onCropAreaSelected(rect)
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 20.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF00E5FF),
-                    contentColor = Color.Black
-                ),
-                shape = RoundedCornerShape(30.dp)
-            ) {
-                Text("⚡ Translate with Clavis", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            }
+            AdjustableCropSelector(bitmap = bitmap, onCropSelected = onCropAreaSelected)
         }
 
         // Loading overlay

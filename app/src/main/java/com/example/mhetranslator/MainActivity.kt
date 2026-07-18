@@ -31,11 +31,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 
@@ -53,70 +52,46 @@ private val SubtleGray = Color(0xFF30363D)
 private val GlowViolet = Color(0x338B5CF6)
 
 class MainActivity : ComponentActivity() {
-
-    private var engine: Engine? = null
     private val _modelStatus = mutableStateOf("checking")
     private val _modelError = mutableStateOf("")
 
     private fun initLocalModelAsync() {
-        if (!GemmaModelManager.isModelDownloaded(this)) {
-            _modelStatus.value = "not_downloaded"
-            return
+        val provider = getSharedPreferences("mhe_prefs", MODE_PRIVATE)
+            .getString("translation_provider", "gemini") ?: "gemini"
+        val isReady = when (provider) {
+            "offline" -> true // ML Kit fallback works while optional Gemma is being downloaded.
+            "qwen" -> HuggingFaceApi.isConfigured
+            else -> GeminiApi.isConfigured || HuggingFaceApi.isConfigured
         }
-        if (engine != null) {
-            _modelStatus.value = "ready"
-            return
-        }
-        _modelStatus.value = "loading"
-        lifecycleScope.launch {
-            try {
-                val e = withContext(Dispatchers.IO) {
-                    val modelPath = GemmaModelManager.getModelPath(this@MainActivity)
-                    val config = EngineConfig(modelPath = modelPath)
-                    val eng = Engine(config)
-                    eng.initialize()
-                    eng
-                }
-                engine = e
-                _modelStatus.value = "ready"
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _modelError.value = e.localizedMessage ?: "Unknown error"
-                _modelStatus.value = "error"
-            }
-        }
+        _modelStatus.value = if (isReady) "ready" else "error"
+        _modelError.value = if (isReady) "" else "Add the selected provider key in Settings."
     }
 
     override fun onResume() {
         super.onResume()
-        if (engine == null) {
-            initLocalModelAsync()
-        }
+        initLocalModelAsync()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Auto-launch model download on first ever launch
-        if (!GemmaModelManager.isModelDownloaded(this)) {
-            val prefs = getSharedPreferences("mhe_prefs", MODE_PRIVATE)
-            val prompted = prefs.getBoolean("model_download_prompted", false)
-            if (!prompted) {
-                prefs.edit().putBoolean("model_download_prompted", true).apply()
-                startActivity(Intent(this, ModelDownloadActivity::class.java))
-            }
-        }
+        // API keys are stored separately from UI preferences; initialise before checking a provider.
+        ApiKeyStore.initialize(this)
+        OfflineTranslationApi.initialize(this)
 
-        // Initialize local AI model asynchronously
+        // Online Gemini and offline ML Kit are selected in the main sheet.
         initLocalModelAsync()
 
         val activity = this
 
         // Capture text highlighted globally from other mobile apps
-        val interceptedText = if (intent.action == Intent.ACTION_PROCESS_TEXT) {
-            intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString() ?: ""
-        } else {
-            "No text selected yet. Open any app, highlight text, and tap 'Clavis Translate'!"
+        val capturedSource = intent.getStringExtra("captured_source").orEmpty().trim()
+        val dictionaryWord = intent.getStringExtra("dictionary_word").orEmpty().trim()
+        val interceptedText = when {
+            capturedSource.isNotBlank() -> capturedSource
+            dictionaryWord.isNotBlank() -> dictionaryWord
+            intent.action == Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString() ?: ""
+            else -> "No text selected yet. Open any app, highlight text, and tap 'Clavis Translate'!"
         }
 
         setContent {
@@ -146,19 +121,31 @@ class MainActivity : ComponentActivity() {
                             shadowElevation = 24.dp
                         ) {
                             TranslatorSheet(
-                                sourceText = interceptedText,
-                                onTranslateRequested = { text, mode, onResult ->
-                                    runTranslation(text, mode, onResult)
+                                initialSourceText = interceptedText,
+                                onTranslateRequested = { text, mode, provider, onResult ->
+                                    runTranslation(text, mode, provider, onResult)
                                 },
                                 onDictionaryRequested = { word, mode, onResult ->
                                     runDictionaryLookup(word, mode, onResult)
                                 },
+                                onProviderChanged = { provider ->
+                                    getSharedPreferences("mhe_prefs", MODE_PRIVATE).edit()
+                                        .putString("translation_provider", provider).apply()
+                                    initLocalModelAsync()
+                                },
                                 onTranslateScreen = {
-                                    startActivity(Intent(activity, CapturePermissionActivity::class.java))
+                                    if (android.provider.Settings.canDrawOverlays(activity)) {
+                                        startActivity(Intent(activity, CapturePermissionActivity::class.java))
+                                    } else {
+                                        startActivity(Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            android.net.Uri.parse("package:${activity.packageName}")
+                                        ))
+                                    }
                                 },
                                 onDismiss = { finish() },
                                 onSettingsClicked = {
-                                    startActivity(Intent(activity, ModelDownloadActivity::class.java))
+                                    startActivity(Intent(activity, ApiSettingsActivity::class.java))
                                 },
                                 isModelLoaded = modelStatus == "ready",
                                 modelStatus = modelStatus,
@@ -171,117 +158,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun runTranslation(text: String, mode: String, onResult: (String) -> Unit) {
+    private fun runTranslation(text: String, mode: String, provider: String, onResult: (String) -> Unit) {
         val targetLanguage = if (mode == "hinglish") "Hindi" else "Marathi"
-        val eng = engine
 
         lifecycleScope.launch {
-            var result = ""
-            var hfSuccess = false
-            
-            // Try Hugging Face API first (higher quality)
             try {
-                result = withContext(Dispatchers.IO) {
-                    HuggingFaceApi.translate(text, targetLanguage)
+                val result = withContext(Dispatchers.IO) {
+                    when (provider) { "offline" -> OfflineTranslationApi.translate(text, targetLanguage); else -> OnlineTranslationApi.translate(text, targetLanguage, provider) }
                 }
-                hfSuccess = result.isNotBlank()
+                if (result.isNotBlank()) onResult(result)
+                else onResult("Translation failed. Please try again.")
             } catch (e: Exception) {
-                Log.e("Translation", "Hugging Face API failed: ${e.message}")
-                hfSuccess = false
-            }
-            
-            // Fallback to Gemma
-            if (!hfSuccess && eng != null) {
-                try {
-                    result = withContext(Dispatchers.IO) {
-                        val prompt = "You are a precise translation assistant for Indian languages. " +
-                            "Translate the following text COMPLETELY into $targetLanguage. " +
-                            "RULES: " +
-                            "1. Translate EVERYTHING into $targetLanguage - do NOT keep any English words " +
-                            "2. Use ONLY Devanagari script for the entire output " +
-                            "3. Be natural and accurate in $targetLanguage " +
-                            "4. Return ONLY the final translated text, no explanations, no extra words.\n\n" +
-                            "Text: $text"
-                        val sb = StringBuilder()
-                        eng.createConversation().use { conversation ->
-                            conversation.sendMessageAsync(prompt).collect { token ->
-                                sb.append(token)
-                            }
-                        }
-                        sb.toString()
-                    }
-                } catch (e: Exception) {
-                    result = ""
-                }
-            }
-            
-            if (result.isBlank() && eng == null) {
-                onResult("⚠️ AI model not loaded.\n\nPlease download the AI model first from the app settings.")
-            } else if (result.isBlank()) {
-                onResult("Translation failed. Using Hugging Face API requires internet connection.")
-            } else {
-                onResult(result)
+                Log.e("Translation", "Translation failed: ${e.message}")
+                onResult(if (provider == "offline") "Offline model download or translation failed. Connect once to download the language model." else "Online translation failed. Check the selected provider key and internet connection.")
             }
         }
     }
 
     private fun runDictionaryLookup(word: String, mode: String, onResult: (String) -> Unit) {
         val targetLanguage = if (mode == "hinglish") "Hindi" else "Marathi"
-        val eng = engine
 
         lifecycleScope.launch {
-            var result = ""
-            var hfSuccess = false
-            
-            // Try Hugging Face API first
             try {
                 val prompt = "You are a dictionary assistant for Indian languages. " +
                     "For the word \"$word\", provide in $targetLanguage: " +
                     "1. Meaning in Devanagari script " +
                     "2. Simple explanation " +
                     "3. Example sentence " +
-                    "Use ONLY $targetLanguage in Devanagari script. " +
+                    "Use a conversational mix of $targetLanguage and English words (like Hinglish/Marathlish). " +
                     "Be concise and natural."
                 
-                result = withContext(Dispatchers.IO) {
-                    HuggingFaceApi.translate(prompt, targetLanguage)
+                val result = withContext(Dispatchers.IO) {
+                    GeminiApi.generate(prompt)
                 }
-                hfSuccess = result.isNotBlank()
+                if (result.isNotBlank()) onResult(result)
+                else onResult("Dictionary lookup failed.")
             } catch (e: Exception) {
-                Log.e("Dictionary", "Hugging Face API failed: ${e.message}")
-                hfSuccess = false
-            }
-            
-            // Fallback to Gemma
-            if (!hfSuccess && eng != null) {
-                try {
-                    result = withContext(Dispatchers.IO) {
-                        val prompt = "You are a dictionary assistant for Indian languages. " +
-                            "For the word \"$word\", provide in $targetLanguage: " +
-                            "1. Meaning in Devanagari script " +
-                            "2. Simple explanation " +
-                            "3. Example sentence " +
-                            "Use ONLY $targetLanguage in Devanagari script. " +
-                            "Be concise and natural."
-                        val sb = StringBuilder()
-                        eng.createConversation().use { conversation ->
-                            conversation.sendMessageAsync(prompt).collect { token ->
-                                sb.append(token)
-                            }
-                        }
-                        sb.toString()
-                    }
-                } catch (e: Exception) {
-                    result = ""
-                }
-            }
-            
-            if (result.isBlank() && eng == null) {
-                onResult("⚠️ AI model not loaded.\n\nPlease download the AI model first.")
-            } else if (result.isBlank()) {
-                onResult("Lookup failed. Using Hugging Face API requires internet connection.")
-            } else {
-                onResult(result)
+                Log.e("Dictionary", "Gemini API failed: ${e.message}")
+                onResult("Lookup failed. Check internet connection.")
             }
         }
     }
@@ -290,9 +204,10 @@ class MainActivity : ComponentActivity() {
 // ── Premium Bottom Sheet UI ────────────────────────────────────────
 @Composable
 fun TranslatorSheet(
-    sourceText: String,
-    onTranslateRequested: (String, String, (String) -> Unit) -> Unit,
+    initialSourceText: String,
+    onTranslateRequested: (String, String, String, (String) -> Unit) -> Unit,
     onDictionaryRequested: (String, String, (String) -> Unit) -> Unit,
+    onProviderChanged: (String) -> Unit = {},
     onTranslateScreen: () -> Unit = {},
     onDismiss: () -> Unit,
     onSettingsClicked: () -> Unit = {},
@@ -308,6 +223,14 @@ fun TranslatorSheet(
     }
     var selectedMode by remember {
         mutableStateOf(if (savedLang == "Hindi") "hinglish" else "marathlish")
+    }
+    val savedProvider = remember {
+        localCtx.getSharedPreferences("mhe_prefs", Context.MODE_PRIVATE)
+            .getString("translation_provider", "gemini") ?: "gemini"
+    }
+    var provider by remember { mutableStateOf(if (savedProvider == "online") "gemini" else savedProvider) }
+    var currentSourceText by remember {
+        mutableStateOf(if (initialSourceText.startsWith("No text")) "" else initialSourceText)
     }
     var translatedOutput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -329,15 +252,17 @@ fun TranslatorSheet(
         onDispose { localCtx.unregisterReceiver(receiver) }
     }
 
-    // Automatically fires translation when text is intercepted, mode is toggled, or model finishes loading
-    LaunchedEffect(selectedMode, sourceText, isModelLoaded) {
-        if (sourceText.isNotEmpty() && !sourceText.startsWith("No text") && isModelLoaded) {
+    // Automatically fires translation when text changes (debounced), mode is toggled, or model finishes loading
+    LaunchedEffect(selectedMode, currentSourceText, provider, isModelLoaded) {
+        if (currentSourceText.isNotBlank() && isModelLoaded) {
             isLoading = true
-            translatedOutput = ""
-            onTranslateRequested(sourceText, selectedMode) { result ->
+            delay(800) // Debounce typing
+            onTranslateRequested(currentSourceText, selectedMode, provider) { result ->
                 translatedOutput = result
                 isLoading = false
             }
+        } else {
+            translatedOutput = ""
         }
     }
 
@@ -383,7 +308,7 @@ fun TranslatorSheet(
                 Text(
                     text = when (modelStatus) {
                         "loading" -> "⏳ Loading AI model..."
-                        "ready" -> "✅ AI ready — offline translation"
+                        "ready" -> "✅ Translation ready"
                         "error" -> "❌ Model error: $modelError"
                         "not_downloaded" -> "⬇️ Tap 🧠 to download AI model"
                         else -> "AI-powered intelligent translation"
@@ -536,6 +461,23 @@ fun TranslatorSheet(
             )
         }
 
+        Text("TRANSLATION PROVIDER", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MutedGray, letterSpacing = 1.5.sp, modifier = Modifier.padding(start = 4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProviderOption("✦", "Gemini", "Online", provider == "gemini", AccentViolet, Modifier.weight(1f)) { provider = "gemini"; onProviderChanged("gemini") }
+            ProviderOption("Q", "Qwen", "Online", provider == "qwen", AccentCyan, Modifier.weight(1f)) { provider = "qwen"; onProviderChanged("qwen") }
+            ProviderOption("◌", "Offline", "On device", provider == "offline", AccentEmerald, Modifier.weight(1f)) { provider = "offline"; onProviderChanged("offline") }
+        }
+        Text(
+            text = when (provider) {
+                "gemini" -> "Gemini: best quality and automatic Qwen fallback"
+                "qwen" -> "Qwen: uses your Hugging Face Inference Provider token"
+                else -> "Offline: ML Kit first, then optional local Gemma rewrite"
+            },
+            color = MutedGray,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(start = 4.dp, top = 8.dp)
+        )
         Spacer(modifier = Modifier.height(12.dp))
 
         // ── Screen Translate Card (Crop-based) ─────────────────────
@@ -682,15 +624,25 @@ fun TranslatorSheet(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = CardDark)
         ) {
-            SelectionContainer {
-                Text(
-                    text = sourceText,
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium,
+            OutlinedTextField(
+                value = currentSourceText,
+                onValueChange = { currentSourceText = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = SoftWhite.copy(alpha = 0.9f),
                     lineHeight = 22.sp
+                ),
+                placeholder = { Text("Paste text here to translate...", color = MutedGray) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = SoftWhite,
+                    unfocusedTextColor = SoftWhite,
+                    cursorColor = AccentCyan
                 )
-            }
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -857,6 +809,33 @@ fun TranslatorSheet(
                 .padding(bottom = 16.dp),
             textAlign = TextAlign.Center
         )
+    }
+}
+
+
+@Composable
+private fun ProviderOption(
+    icon: String,
+    label: String,
+    caption: String,
+    selected: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .height(72.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) accent.copy(alpha = 0.18f) else CardDark)
+            .border(1.dp, if (selected) accent.copy(alpha = 0.8f) else SubtleGray, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("$icon  $label", color = if (selected) SoftWhite else MutedGray, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(2.dp))
+        Text(caption, color = if (selected) accent else MutedGray, fontSize = 10.sp)
     }
 }
 

@@ -1,9 +1,6 @@
-import java.util.Properties // ◄ ADDED THIS IMPORT AT THE VERY TOP
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.google.gms.google.services)
 }
 
 android {
@@ -18,19 +15,11 @@ android {
         applicationId = "com.example.mhetranslator"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Read your apiKey from local.properties safely using the imported class
-        val localProperties = Properties() // ◄ CHANGED THIS LINE
-        val localPropertiesFile = project.rootProject.file("local.properties")
-        if (localPropertiesFile.exists()) {
-            localProperties.load(localPropertiesFile.inputStream())
-        }
-        val apiKeyStr = localProperties.getProperty("apiKey") ?: ""
-        buildConfigField("String", "apiKey", "\"$apiKeyStr\"")
     }
 
     buildTypes {
@@ -48,7 +37,6 @@ android {
     }
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 }
 
@@ -62,30 +50,41 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.firebase.ai)
-    // Force all Ktor dependencies strictly to version 2.3.12 to avoid HttpTimeout conflict
-    implementation(enforcedPlatform("io.ktor:ktor-bom:2.3.12"))
-
-    // Core Google AI SDK for Gemini compatibility
-    implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
-    implementation("io.ktor:ktor-client-core")
-    implementation("io.ktor:ktor-client-android")
 
     // Google ML Kit for On-Device Text Recognition (OCR)
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0") {
+        exclude(group = "com.google.mlkit", module = "vision-interfaces")
+    }
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1") {
+        exclude(group = "com.google.mlkit", module = "text-recognition-bundled-common")
+        exclude(group = "com.google.mlkit", module = "vision-interfaces")
+    }
+    implementation("com.google.mlkit:text-recognition-devanagari:16.0.1") {
+        exclude(group = "com.google.mlkit", module = "text-recognition-bundled-common")
+        exclude(group = "com.google.mlkit", module = "vision-interfaces")
+    }
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1") {
+        exclude(group = "com.google.mlkit", module = "text-recognition-bundled-common")
+        exclude(group = "com.google.mlkit", module = "vision-interfaces")
+    }
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1") {
+        exclude(group = "com.google.mlkit", module = "text-recognition-bundled-common")
+        exclude(group = "com.google.mlkit", module = "vision-interfaces")
+    }
     implementation("com.google.mlkit:translate:17.0.3")
+    // Bundled, on-device language detection for the offline translation pipeline.
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation(files("libs/text-recognition-bundled-common-17.0.0.aar"))
+    implementation(files("libs/vision-interfaces-16.3.0.aar"))
 
     // LiteRT-LM for on-device Gemma E2B inference (replaces deprecated MediaPipe)
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.13.1")
 
-    // Firebase Storage for hosting Gemma model (auto-download for users)
-    implementation("com.google.firebase:firebase-storage-ktx:21.0.1")
-    
-    // Hugging Face Inference API (Online only)
+    // Online provider clients
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
     
-    // Image Crop View for improved selection UI
+    // Adjustable crop selection
     implementation(libs.image.crop.view)
 
     testImplementation(libs.junit)
