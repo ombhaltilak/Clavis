@@ -67,12 +67,15 @@ object GemmaRewriteApi {
     private fun rewritePrompt(englishText: String, targetLanguage: String): String {
         val style = if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"
         return """
-            Rewrite the English text below into natural $style.
-            Use natural everyday Indian speech, not a fixed language percentage. This is a strict script rule for both Hinglish and Marathlish: every common daily-use English word MUST stay in English Latin letters; never write it in Devanagari or transliterated letters. Keep phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online in Latin script, never forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Do not force either language merely to meet a ratio.
-            Preserve names, numbers, URLs, codes, and line breaks. Return only the rewritten text.
+            TASK: Translate the English input into natural $style.
+            OUTPUT: Return only one final translation—no explanation, labels, markdown, or reasoning.
+            SCRIPT: Hindi/Marathi words use Devanagari. Everyday Indian English words always stay in English Latin letters: phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate these words into Devanagari.
+            STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
+            EXAMPLE: English: I have a meeting at the office after lunch. Hinglish: मेरे पास lunch के बाद office में meeting है. Marathlish: माझी lunch नंतर office मध्ये meeting आहे.
+            Preserve names, numbers, URLs, codes, and line breaks.
 
-            English text:
-            $englishText
+            INPUT: $englishText
+            FINAL TRANSLATION:
         """.trimIndent()
     }
 }

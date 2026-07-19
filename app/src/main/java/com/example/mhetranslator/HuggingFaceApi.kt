@@ -25,12 +25,17 @@ object HuggingFaceApi {
 
     val isConfigured: Boolean get() = apiKey.isNotBlank()
 
-    private data class Message(val role: String, val content: String)
+    private data class Message(
+        val role: String,
+        val content: String = "",
+        @SerializedName("reasoning_content") val reasoningContent: String? = null
+    )
     private data class ChatRequest(
         val model: String,
         val messages: List<Message>,
         val temperature: Double,
-        @SerializedName("max_tokens") val maxTokens: Int
+        @SerializedName("max_tokens") val maxTokens: Int,
+        @SerializedName("chat_template_kwargs") val chatTemplateKwargs: Map<String, Boolean> = mapOf("enable_thinking" to false)
     )
     private data class ChatResponse(val choices: List<Choice> = emptyList())
     private data class Choice(val message: Message? = null)
@@ -41,7 +46,7 @@ object HuggingFaceApi {
             val body = gson.toJson(ChatRequest(
                 model = MODEL,
                 messages = listOf(
-                    Message("system", "You are a precise Indian-language translation assistant. Follow the user instructions exactly. Return only the requested translation."),
+                    Message("system", "You are Clavis. Translate precisely into natural Indian mixed language. Never explain, reason aloud, use think tags, or add labels. Return only the final translated text."),
                     Message("user", prompt)
                 ),
                 temperature = 0.2,
@@ -60,14 +65,24 @@ object HuggingFaceApi {
                     return ""
                 }
                 gson.fromJson(responseBody, ChatResponse::class.java)
-                    ?.choices?.firstOrNull()?.message?.content?.trim().orEmpty()
+                    ?.choices?.firstOrNull()?.message?.content.orEmpty()
+                    .replace(Regex("(?s)<think>.*?</think>"), "")
+                    .removePrefix("Translation:").trim()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Qwen fallback failed", e)
             ""
         }
     }
-    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("Translate the following text to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: every common daily-use English word MUST stay in English Latin letters; never write it in Devanagari or transliterated letters. Keep phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online in Latin script, never forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Apply the same rule for Hindi and Marathi. Do not force either language merely to meet a ratio. Return only the translation.\n\nText: $text"))
+    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("""TASK: Translate the English input into natural Indian mixed $targetLanguage.
+OUTPUT: Return only one final translation—no explanation, labels, markdown, or think tags.
+SCRIPT: Hindi/Marathi words use Devanagari. Everyday Indian English words always stay in English Latin letters: phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate them into Devanagari.
+STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
+EXAMPLE: English: I have a meeting at the office after lunch. Hindi mix: मेरे पास lunch के बाद office में meeting है. Marathi mix: माझी lunch नंतर office मध्ये meeting आहे.
+
+INPUT: $text
+FINAL TRANSLATION:"""))
+
     suspend fun translateLines(lines: List<String>, targetLanguage: String): List<String> = lines.map { translate(it, targetLanguage).ifBlank { it } }
 
 }
