@@ -79,9 +79,9 @@ object GeminiApi {
     }
 
     suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generateWithFallback(
-        """Translate the following text to $targetLanguage.
+        """Translate the following text into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}—natural mixed Indian language, not plain $targetLanguage.
 Use natural everyday Indian speech, not a fixed language percentage. This is a strict script rule: every common daily-use English word MUST remain in English Latin letters, never Devanagari or a transliteration. For example write phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online — never फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Example: Railway station कहाँ है?
-For Marathi, apply exactly the same Latin-script rule for everyday English words and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio.
+For Hinglish, use natural Hindi for the remaining language; for Marathlish, use natural Marathi. Apply exactly the same Latin-script rule in both modes. Do not force either language merely to meet a ratio.
 Preserve names, numbers, URLs, codes, and line breaks. Return only the translation.
 
 Text: $text"""
@@ -91,7 +91,7 @@ Text: $text"""
         if (lines.isEmpty()) return emptyList()
         val input = org.json.JSONArray(lines).toString()
         val raw = generateWithFallback(
-            """Translate this JSON array to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: write every common daily-use English word only in English Latin letters, never Devanagari/transliterated letters. Keep words such as phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online exactly in Latin script; never output forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Apply this same rule for both Hindi and Marathi. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
+            """Translate this JSON array into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}, not plain $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: write every common daily-use English word only in English Latin letters, never Devanagari/transliterated letters. Keep words such as phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online exactly in Latin script; never output forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Hinglish must use Hindi for the remaining language; Marathlish must use Marathi. Apply this same rule in both modes. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
 Return only a valid JSON array with the same number and order of strings.
 
 $input"""

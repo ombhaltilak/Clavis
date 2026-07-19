@@ -74,9 +74,9 @@ object HuggingFaceApi {
             ""
         }
     }
-    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("""TASK: Translate the English input into natural Indian mixed $targetLanguage.
+    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("""TASK: Translate the English input into natural ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}, not plain $targetLanguage.
 OUTPUT: Return only one final translation—no explanation, labels, markdown, or think tags.
-SCRIPT: Hindi/Marathi words use Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
+SCRIPT: In Hinglish use Hindi words in Devanagari; in Marathlish use Marathi words in Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
 STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
 EXAMPLE: English: I have a meeting at the office after lunch. Hindi mix: मेरे पास lunch के बाद office में meeting है. Marathi mix: माझी lunch नंतर office मध्ये meeting आहे.
 

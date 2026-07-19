@@ -82,7 +82,7 @@ object GemmaRewriteApi {
         return """
             TASK: Translate the English input into natural $style.
             OUTPUT: Return only one final translation—no explanation, labels, markdown, or reasoning.
-            SCRIPT: Hindi/Marathi words use Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
+            SCRIPT: For Hinglish use Hindi words in Devanagari; for Marathlish use Marathi words in Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
             STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
             EXAMPLE: English: I have a meeting at the office after lunch. Hinglish: मेरे पास lunch के बाद office में meeting है. Marathlish: माझी lunch नंतर office मध्ये meeting आहे.
             Preserve names, numbers, URLs, codes, and line breaks.
