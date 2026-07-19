@@ -78,27 +78,27 @@ object GeminiApi {
         return HuggingFaceApi.generate(prompt)
     }
 
-    suspend fun translate(text: String, targetLanguage: String): String = generateWithFallback(
+    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generateWithFallback(
         """Translate the following text to $targetLanguage.
-Use natural everyday Indian speech, not a fixed language percentage. For Hindi, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. Example: Railway station कहाँ है?
-For Marathi, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio.
+Use natural everyday Indian speech, not a fixed language percentage. This is a strict script rule: every common daily-use English word MUST remain in English Latin letters, never Devanagari or a transliteration. For example write phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online — never फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Example: Railway station कहाँ है?
+For Marathi, apply exactly the same Latin-script rule for everyday English words and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio.
 Preserve names, numbers, URLs, codes, and line breaks. Return only the translation.
 
 Text: $text"""
-    )
+    ))
 
     suspend fun translateLines(lines: List<String>, targetLanguage: String): List<String> {
         if (lines.isEmpty()) return emptyList()
         val input = org.json.JSONArray(lines).toString()
         val raw = generateWithFallback(
-            """Translate this JSON array to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. For Hindi, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. For Marathi, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
+            """Translate this JSON array to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: write every common daily-use English word only in English Latin letters, never Devanagari/transliterated letters. Keep words such as phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online exactly in Latin script; never output forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Apply this same rule for both Hindi and Marathi. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
 Return only a valid JSON array with the same number and order of strings.
 
 $input"""
         ).trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return try {
             val array = org.json.JSONArray(raw)
-            List(lines.size) { index -> array.optString(index, lines[index]) }
+            List(lines.size) { index -> OfflineTranslationApi.preserveEverydayEnglishScript(array.optString(index, lines[index])) }
         } catch (error: Exception) {
             Log.e(TAG, "Could not parse line translation response", error)
             lines

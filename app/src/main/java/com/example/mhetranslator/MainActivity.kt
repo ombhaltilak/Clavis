@@ -185,7 +185,7 @@ class MainActivity : ComponentActivity() {
                     "1. Meaning in Devanagari script " +
                     "2. Simple explanation " +
                     "3. Example sentence " +
-                    "Use natural everyday Indian speech. Keep English words Indians commonly use in daily life in English Latin script; do not follow a fixed language percentage. " +
+                    "Use natural everyday Indian speech. Strict script rule: every common daily-use English word must remain in English Latin letters, never Devanagari or transliterated letters (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online). " +
                     "Be concise and natural."
                 
                 val result = withContext(Dispatchers.IO) {

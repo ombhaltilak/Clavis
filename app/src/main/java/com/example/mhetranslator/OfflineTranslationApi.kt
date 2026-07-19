@@ -22,6 +22,25 @@ object OfflineTranslationApi {
     private const val MODEL_DOWNLOAD_TIMEOUT_MS = 45_000L
     private const val LANGUAGE_ID_TIMEOUT_MS = 10_000L
     private const val TAG = "OfflineTranslation"
+    /** Ensures common Indian English words stay readable in their original Latin script. */
+    fun preserveEverydayEnglishScript(text: String): String {
+        val replacements = linkedMapOf(
+            "फोन" to "phone", "टिकट" to "ticket", "स्टेशन" to "station", "ऑफिस" to "office",
+            "मीटिंग" to "meeting", "मैसेज" to "message", "संदेश" to "message", "टाइम" to "time",
+            "स्कूल" to "school", "मार्केट" to "market", "डॉक्टर" to "doctor", "प्रॉब्लम" to "problem",
+            "बस" to "bus", "ट्रेन" to "train", "ऐप" to "app", "स्क्रीन" to "screen", "ऑनलाइन" to "online",
+            "मोबाइल" to "mobile", "कंप्यूटर" to "computer", "लैपटॉप" to "laptop", "चार्जर" to "charger",
+            "कैमरा" to "camera", "फोटो" to "photo", "वीडियो" to "video", "कॉल" to "call",
+            "नंबर" to "number", "इंटरनेट" to "internet", "बैंक" to "bank", "पेमेंट" to "payment",
+            "कार्ड" to "card", "बिल" to "bill", "हॉस्पिटल" to "hospital", "होटल" to "hotel",
+            "प्लान" to "plan", "फ्रेंड" to "friend", "फैमिली" to "family", "गेम" to "game",
+            "क्लास" to "class", "कॉलेज" to "college", "टीचर" to "teacher", "स्टूडेंट" to "student"
+        )
+        return replacements.entries.fold(text) { current, (from, to) ->
+            current.replace(Regex("(?<![\\p{L}\\p{M}])" + Regex.escape(from) + "(?![\\p{L}\\p{M}])"), to)
+        }
+    }
+
     private var appContext: Context? = null
 
     fun initialize(context: Context) {
@@ -114,10 +133,12 @@ object OfflineTranslationApi {
         if (text.isBlank()) return@withContext ""
         try {
             val english = toEnglish(text)
-            GemmaRewriteApi.rewrite(appContext, english, targetLanguage).ifBlank {
-                // Keep offline translation usable until the optional Gemma model is installed.
-                translateWithMlKit(english, TranslateLanguage.ENGLISH, languageCode(targetLanguage))
-            }
+            preserveEverydayEnglishScript(
+                GemmaRewriteApi.rewrite(appContext, english, targetLanguage).ifBlank {
+                    // Keep offline translation usable until the optional Gemma model is installed.
+                    translateWithMlKit(english, TranslateLanguage.ENGLISH, languageCode(targetLanguage))
+                }
+            )
         } catch (error: Exception) {
             Log.e(TAG, "Offline translation failed", error)
             throw error

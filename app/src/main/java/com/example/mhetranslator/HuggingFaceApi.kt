@@ -67,8 +67,7 @@ object HuggingFaceApi {
             ""
         }
     }
-    suspend fun translate(text: String, targetLanguage: String): String = generate("Translate the following text to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. For Hindi, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. For Marathi, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio. Return only the translation.\n\nText: $text")
-
+    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("Translate the following text to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: every common daily-use English word MUST stay in English Latin letters; never write it in Devanagari or transliterated letters. Keep phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online in Latin script, never forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Apply the same rule for Hindi and Marathi. Do not force either language merely to meet a ratio. Return only the translation.\n\nText: $text"))
     suspend fun translateLines(lines: List<String>, targetLanguage: String): List<String> = lines.map { translate(it, targetLanguage).ifBlank { it } }
 
 }
