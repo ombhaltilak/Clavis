@@ -125,8 +125,8 @@ class MainActivity : ComponentActivity() {
                                 onTranslateRequested = { text, mode, provider, onResult ->
                                     runTranslation(text, mode, provider, onResult)
                                 },
-                                onDictionaryRequested = { word, mode, onResult ->
-                                    runDictionaryLookup(word, mode, onResult)
+                                onDictionaryRequested = { word, mode, provider, onResult ->
+                                    runDictionaryLookup(word, mode, provider, onResult)
                                 },
                                 onProviderChanged = { provider ->
                                     getSharedPreferences("mhe_prefs", MODE_PRIVATE).edit()
@@ -175,7 +175,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun runDictionaryLookup(word: String, mode: String, onResult: (String) -> Unit) {
+    private fun runDictionaryLookup(word: String, mode: String, provider: String, onResult: (String) -> Unit) {
         val targetLanguage = if (mode == "hinglish") "Hindi" else "Marathi"
 
         lifecycleScope.launch {
@@ -185,14 +185,18 @@ class MainActivity : ComponentActivity() {
                     "1. Meaning in Devanagari script " +
                     "2. Simple explanation " +
                     "3. Example sentence " +
-                    "Use a conversational mix of $targetLanguage and English words (like Hinglish/Marathlish). " +
+                    "Use natural everyday Indian speech. Keep English words Indians commonly use in daily life in English Latin script; do not follow a fixed language percentage. " +
                     "Be concise and natural."
                 
                 val result = withContext(Dispatchers.IO) {
-                    GeminiApi.generate(prompt)
+                    when (provider) {
+                        "qwen" -> HuggingFaceApi.generate(prompt)
+                        "offline" -> GemmaRewriteApi.generate(this@MainActivity, prompt)
+                        else -> GeminiApi.generate(prompt)
+                    }
                 }
                 if (result.isNotBlank()) onResult(result)
-                else onResult("Dictionary lookup failed.")
+                else onResult(if (provider == "offline") "Offline dictionary requires the downloaded Gemma model." else "Dictionary lookup failed. Check the selected provider key and internet connection.")
             } catch (e: Exception) {
                 Log.e("Dictionary", "Gemini API failed: ${e.message}")
                 onResult("Lookup failed. Check internet connection.")
@@ -206,7 +210,7 @@ class MainActivity : ComponentActivity() {
 fun TranslatorSheet(
     initialSourceText: String,
     onTranslateRequested: (String, String, String, (String) -> Unit) -> Unit,
-    onDictionaryRequested: (String, String, (String) -> Unit) -> Unit,
+    onDictionaryRequested: (String, String, String, (String) -> Unit) -> Unit,
     onProviderChanged: (String) -> Unit = {},
     onTranslateScreen: () -> Unit = {},
     onDismiss: () -> Unit,
@@ -762,7 +766,7 @@ fun TranslatorSheet(
                     if (dictionaryWord.isNotBlank()) {
                         isDictLoading = true
                         dictionaryMeaning = ""
-                        onDictionaryRequested(dictionaryWord, selectedMode) { result ->
+                        onDictionaryRequested(dictionaryWord, selectedMode, provider) { result ->
                             dictionaryMeaning = result
                             isDictLoading = false
                         }

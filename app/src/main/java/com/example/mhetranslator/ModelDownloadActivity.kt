@@ -62,6 +62,18 @@ class ModelDownloadActivity : ComponentActivity() {
                         )
                     }
                 },
+                onStartFromScratch = { onProgress, onComplete, onError ->
+                    GemmaModelManager.deletePartialDownload(this@ModelDownloadActivity)
+                    lifecycleScope.launch {
+                        val result = GemmaModelManager.downloadModel(this@ModelDownloadActivity) { downloaded, total, percent ->
+                            onProgress(downloaded, total, percent)
+                        }
+                        result.fold(
+                            onSuccess = { onComplete() },
+                            onFailure = { error -> onError(error.message ?: "Unknown error") }
+                        )
+                    }
+                },
                 onDownloadComplete = {
                     setResult(RESULT_OK)
                     finish()
@@ -90,6 +102,11 @@ fun ModelDownloadScreen(
     currentLanguage: String = "Hindi",
     onLanguageChanged: (String) -> Unit = {},
     onStartDownload: (
+        onProgress: (Long, Long, Int) -> Unit,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit,
+    onStartFromScratch: (
         onProgress: (Long, Long, Int) -> Unit,
         onComplete: () -> Unit,
         onError: (String) -> Unit
@@ -258,6 +275,38 @@ fun ModelDownloadScreen(
                         )
                     }
 
+                    if (partialDownloadSizeMB > 0) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                downloadState = DownloadState.Downloading
+                                onStartFromScratch(
+                                    { dl, total, pct ->
+                                        bytesDownloaded = dl
+                                        totalBytes = total
+                                        progressPercent = pct
+                                    },
+                                    { downloadState = DownloadState.Complete },
+                                    { message ->
+                                        errorMessage = message
+                                        downloadState = DownloadState.Error
+                                    }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(24.dp)
+                        ) {
+                            Text("↺  Start from scratch", fontWeight = FontWeight.SemiBold)
+                        }
+                        Text(
+                            "Deletes the saved partial download and starts again from 0 MB.",
+                            color = Color(0xFF707090),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     TextButton(onClick = onSkip) {
@@ -379,6 +428,38 @@ fun ModelDownloadScreen(
                         shape = RoundedCornerShape(28.dp)
                     ) {
                         Text("▶  Resume Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
+
+                    if (partialDownloadSizeMB > 0) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                downloadState = DownloadState.Downloading
+                                onStartFromScratch(
+                                    { dl, total, pct ->
+                                        bytesDownloaded = dl
+                                        totalBytes = total
+                                        progressPercent = pct
+                                    },
+                                    { downloadState = DownloadState.Complete },
+                                    { message ->
+                                        errorMessage = message
+                                        downloadState = DownloadState.Error
+                                    }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(24.dp)
+                        ) {
+                            Text("↺  Start from scratch", fontWeight = FontWeight.SemiBold)
+                        }
+                        Text(
+                            "Deletes the saved partial download and starts again from 0 MB.",
+                            color = Color(0xFF707090),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))

@@ -118,9 +118,13 @@ object GemmaModelManager {
         }
     }
 
+    fun deletePartialDownload(context: Context) {
+        File(context.filesDir, "$MODEL_FILENAME.tmp").delete()
+    }
+
     /** Explicitly removes both the completed model and any resumable partial download. */
     fun deleteModel(context: Context) {
         File(context.filesDir, MODEL_FILENAME).delete()
-        File(context.filesDir, "$MODEL_FILENAME.tmp").delete()
+        deletePartialDownload(context)
     }
 }

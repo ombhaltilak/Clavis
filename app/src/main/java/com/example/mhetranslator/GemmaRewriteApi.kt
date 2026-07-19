@@ -17,20 +17,24 @@ object GemmaRewriteApi {
     private var engine: Engine? = null
     private var loadedModelPath: String? = null
 
-    suspend fun rewrite(context: Context?, englishText: String, targetLanguage: String): String {
-        if (context == null || englishText.isBlank() || !GemmaModelManager.isModelDownloaded(context)) {
+    suspend fun rewrite(context: Context?, englishText: String, targetLanguage: String): String =
+        generate(context, rewritePrompt(englishText, targetLanguage))
+
+    /** Runs an arbitrary prompt on the downloaded Gemma model without network access. */
+    suspend fun generate(context: Context?, prompt: String): String {
+        if (context == null || prompt.isBlank() || !GemmaModelManager.isModelDownloaded(context)) {
             return ""
         }
         return withContext(Dispatchers.IO) {
             val localEngine = engineFor(context) ?: return@withContext ""
             val conversation = localEngine.createConversation()
             try {
-                val response = conversation.sendMessage(rewritePrompt(englishText, targetLanguage))
+                val response = conversation.sendMessage(prompt)
                 response.contents.contents.filterIsInstance<Content.Text>()
                     .joinToString(separator = "") { it.text }
                     .trim()
             } catch (error: Exception) {
-                Log.e(TAG, "Gemma rewrite failed", error)
+                Log.e(TAG, "Gemma generation failed", error)
                 ""
             } finally {
                 conversation.close()
@@ -64,7 +68,7 @@ object GemmaRewriteApi {
         val style = if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"
         return """
             Rewrite the English text below into natural $style.
-            For Hinglish, do not produce pure Hindi: retain 30-50% familiar content words in English Latin letters and use Devanagari only for Hindi connector words. For Marathlish, retain familiar English content words in Latin letters and use Devanagari for Marathi grammar words.
+            Use natural everyday Indian speech, not a fixed language percentage. For Hinglish, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. For Marathlish, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio.
             Preserve names, numbers, URLs, codes, and line breaks. Return only the rewritten text.
 
             English text:

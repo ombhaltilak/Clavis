@@ -80,8 +80,8 @@ object GeminiApi {
 
     suspend fun translate(text: String, targetLanguage: String): String = generateWithFallback(
         """Translate the following text to $targetLanguage.
-Use a true mix: for Hindi, never output pure Hindi—retain 30-50% familiar content words in English Latin letters and use Devanagari only for Hindi connector words. Example: Railway station कहाँ है?
-For Marathi, retain familiar English content words in Latin letters and use Devanagari for Marathi grammar words.
+Use natural everyday Indian speech, not a fixed language percentage. For Hindi, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. Example: Railway station कहाँ है?
+For Marathi, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio.
 Preserve names, numbers, URLs, codes, and line breaks. Return only the translation.
 
 Text: $text"""
@@ -91,7 +91,7 @@ Text: $text"""
         if (lines.isEmpty()) return emptyList()
         val input = org.json.JSONArray(lines).toString()
         val raw = generateWithFallback(
-            """Translate this JSON array to $targetLanguage. For Hindi, never output pure Hindi—retain 30-50% familiar content words in English Latin letters and use Devanagari only for Hindi connector words. For Marathi, retain familiar English content words in Latin letters. Return only a valid JSON array with the same number and order of strings.
+            """Translate this JSON array to $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. For Hindi, keep English words that Indians commonly use in daily life in English Latin script (for example phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, and bus). Translate only words normally spoken in Hindi or Marathi. For Marathi, also keep everyday Indian English words in English Latin script and use Marathi naturally for the remaining language. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
 Return only a valid JSON array with the same number and order of strings.
 
 $input"""
