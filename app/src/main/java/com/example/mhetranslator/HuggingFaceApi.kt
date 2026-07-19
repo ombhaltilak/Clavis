@@ -9,11 +9,11 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
-/** Hugging Face Inference Providers fallback using Qwen3. */
+/** Hugging Face Inference Providers fallback using instruction-tuned Qwen. */
 object HuggingFaceApi {
     private const val TAG = "HuggingFaceApi"
     private const val ENDPOINT = "https://router.huggingface.co/v1/chat/completions"
-    private const val MODEL = "Qwen/Qwen3-32B"
+    private const val MODEL = "Qwen/Qwen2.5-72B-Instruct"
     private val apiKey get() = ApiKeyStore.get("huggingface")
     private val gson = Gson()
     private val jsonMediaType = "application/json".toMediaType()
@@ -76,7 +76,7 @@ object HuggingFaceApi {
     }
     suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generate("""TASK: Translate the English input into natural Indian mixed $targetLanguage.
 OUTPUT: Return only one final translation—no explanation, labels, markdown, or think tags.
-SCRIPT: Hindi/Marathi words use Devanagari. Everyday Indian English words always stay in English Latin letters: phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate them into Devanagari.
+SCRIPT: Hindi/Marathi words use Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
 STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
 EXAMPLE: English: I have a meeting at the office after lunch. Hindi mix: मेरे पास lunch के बाद office में meeting है. Marathi mix: माझी lunch नंतर office मध्ये meeting आहे.
 

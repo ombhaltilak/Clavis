@@ -30,9 +30,11 @@ object GemmaRewriteApi {
             val conversation = localEngine.createConversation()
             try {
                 val response = conversation.sendMessage(prompt)
-                response.contents.contents.filterIsInstance<Content.Text>()
-                    .joinToString(separator = "") { it.text }
-                    .trim()
+                cleanTranslationOutput(
+                    response.contents.contents.filterIsInstance<Content.Text>()
+                        .joinToString(separator = "") { it.text },
+                    keepLineBreaks = prompt.substringAfter("INPUT: ").substringBefore("FINAL TRANSLATION:").contains("\n")
+                )
             } catch (error: Exception) {
                 Log.e(TAG, "Gemma generation failed", error)
                 ""
@@ -40,6 +42,17 @@ object GemmaRewriteApi {
                 conversation.close()
             }
         }
+    }
+
+    private fun cleanTranslationOutput(text: String, keepLineBreaks: Boolean): String {
+        val withoutLabel = text.trim()
+            .removePrefix("FINAL TRANSLATION:")
+            .removePrefix("Translation:")
+            .removePrefix("Hinglish:")
+            .removePrefix("Marathlish:")
+            .trim()
+        val normalized = if (keepLineBreaks) withoutLabel else withoutLabel.replace(Regex("\\s+"), " ")
+        return OfflineTranslationApi.preserveEverydayEnglishScript(normalized)
     }
 
     fun close() {
@@ -69,7 +82,7 @@ object GemmaRewriteApi {
         return """
             TASK: Translate the English input into natural $style.
             OUTPUT: Return only one final translation—no explanation, labels, markdown, or reasoning.
-            SCRIPT: Hindi/Marathi words use Devanagari. Everyday Indian English words always stay in English Latin letters: phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate these words into Devanagari.
+            SCRIPT: Hindi/Marathi words use Devanagari. Every English word in the INPUT that people commonly use in India must be copied exactly in English Latin letters, including project, files, codes, phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, online. Never transliterate, split, or translate those words into Devanagari.
             STYLE: Use the words people naturally say in India; do not use a fixed language ratio.
             EXAMPLE: English: I have a meeting at the office after lunch. Hinglish: मेरे पास lunch के बाद office में meeting है. Marathlish: माझी lunch नंतर office मध्ये meeting आहे.
             Preserve names, numbers, URLs, codes, and line breaks.
