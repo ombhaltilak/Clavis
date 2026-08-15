@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
                 
                 val result = withContext(Dispatchers.IO) {
                     when (provider) {
-                        "qwen" -> HuggingFaceApi.generate(prompt)
+                        "qwen" -> HuggingFaceApi.generateDictionary(prompt, targetLanguage)
                         "offline" -> GemmaRewriteApi.generate(this@MainActivity, prompt)
                         else -> GeminiApi.generate(prompt)
                     }
@@ -223,7 +223,7 @@ fun TranslatorSheet(
     val localCtx = androidx.compose.ui.platform.LocalContext.current
     val savedLang = remember {
         localCtx.getSharedPreferences("mhe_prefs", Context.MODE_PRIVATE)
-            .getString("selected_language", "Marathi") ?: "Marathi"
+            .getString("selected_language", "Hindi") ?: "Hindi"
     }
     var selectedMode by remember {
         mutableStateOf(if (savedLang == "Hindi") "hinglish" else "marathlish")
@@ -238,22 +238,12 @@ fun TranslatorSheet(
     }
     var translatedOutput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var dismissedModelError by remember { mutableStateOf<String?>(null) }
+    val isCompactWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 360
+    val horizontalPadding = if (isCompactWidth) 12.dp else 20.dp
 
-    // Listen for voice-triggered language changes
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        val receiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
-                val lang = intent?.getStringExtra("language") ?: return
-                selectedMode = if (lang == "Hindi") "hinglish" else "marathlish"
-            }
-        }
-        val filter = android.content.IntentFilter(VoiceCommandService.ACTION_LANG_CHANGED)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            localCtx.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            localCtx.registerReceiver(receiver, filter)
-        }
-        onDispose { localCtx.unregisterReceiver(receiver) }
+    LaunchedEffect(modelStatus) {
+        if (modelStatus != "error") dismissedModelError = null
     }
 
     // Automatically fires translation when text changes (debounced), mode is toggled, or model finishes loading
@@ -280,7 +270,7 @@ fun TranslatorSheet(
                     endY = 1200f
                 )
             )
-            .padding(horizontal = 20.dp)
+            .padding(horizontal = horizontalPadding)
             .verticalScroll(rememberScrollState())
     ) {
         // ── Drag Handle ────────────────────────────────────────────
@@ -302,107 +292,61 @@ fun TranslatorSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "✦ Clavis",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = SoftWhite
                 )
-                Text(
-                    text = when (modelStatus) {
-                        "loading" -> "⏳ Loading AI model..."
-                        "ready" -> "✅ Translation ready"
-                        "error" -> "❌ Model error: $modelError"
-                        "not_downloaded" -> "⬇️ Tap 🧠 to download AI model"
-                        else -> "AI-powered intelligent translation"
-                    },
-                    fontSize = 12.sp,
-                    color = when (modelStatus) {
-                        "ready" -> AccentEmerald
-                        "error" -> Color(0xFFFF6090)
-                        "loading" -> AccentCyan
-                        else -> MutedGray
-                    },
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+                if (modelStatus == "error" && dismissedModelError != modelError) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "❌",
+                            modifier = Modifier.clickable { dismissedModelError = modelError },
+                            fontSize = 16.sp,
+                            color = Color(0xFFFF6090)
+                        )
+                        Text(
+                            text = modelError,
+                            modifier = Modifier.weight(1f),
+                            fontSize = 12.sp,
+                            color = Color(0xFFFF6090)
+                        )
+                        Text(
+                            text = "Settings",
+                            modifier = Modifier.clickable { onSettingsClicked() },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AccentCyan
+                        )
+                    }
+                } else {
+                    Text(
+                        text = when (modelStatus) {
+                            "loading" -> "⏳ Loading AI model..."
+                            "ready" -> "✅ Translation ready"
+                            "not_downloaded" -> "⬇️ Tap 🧠 to download AI model"
+                            else -> "AI-powered intelligent translation"
+                        },
+                        fontSize = 12.sp,
+                        color = when (modelStatus) {
+                            "ready" -> AccentEmerald
+                            "loading" -> AccentCyan
+                            else -> MutedGray
+                        },
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Voice command mic button
-                val voiceContext = androidx.compose.ui.platform.LocalContext.current
-                val isVoiceActive = VoiceCommandService.isRunning
-
-                // Permission launcher
-                val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                    contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-                ) { granted ->
-                    if (granted) {
-                        // Permission granted → start service
-                        val intent = android.content.Intent(voiceContext, VoiceCommandService::class.java)
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            voiceContext.startForegroundService(intent)
-                        } else {
-                            voiceContext.startService(intent)
-                        }
-                    } else {
-                        android.widget.Toast.makeText(
-                            voiceContext,
-                            "Microphone permission is needed for voice commands",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isVoiceActive) Color(0xFF1A2A3A) else Color(0xFF2A1A2A)
-                        )
-                        .clickable {
-                            if (isVoiceActive) {
-                                voiceContext.stopService(
-                                    android.content.Intent(voiceContext, VoiceCommandService::class.java)
-                                )
-                            } else {
-                                // Check if we already have mic permission
-                                val hasMicPerm = androidx.core.content.ContextCompat.checkSelfPermission(
-                                    voiceContext, android.Manifest.permission.RECORD_AUDIO
-                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                                if (hasMicPerm) {
-                                    // Also check overlay permission
-                                    if (!android.provider.Settings.canDrawOverlays(voiceContext)) {
-                                        val overlayIntent = android.content.Intent(
-                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            android.net.Uri.parse("package:${voiceContext.packageName}")
-                                        )
-                                        overlayIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                        voiceContext.startActivity(overlayIntent)
-                                    } else {
-                                        val intent = android.content.Intent(voiceContext, VoiceCommandService::class.java)
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                            voiceContext.startForegroundService(intent)
-                                        } else {
-                                            voiceContext.startService(intent)
-                                        }
-                                    }
-                                } else {
-                                    // Request mic permission
-                                    micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (isVoiceActive) "🔴" else "🎤",
-                        fontSize = 14.sp
-                    )
-                }
-
                 // Settings / Model button
                 Box(
                     modifier = Modifier
@@ -452,14 +396,22 @@ fun TranslatorSheet(
             LanguageChip(
                 label = "मराठी  Marathi",
                 isSelected = selectedMode == "marathlish",
-                onClick = { selectedMode = "marathlish" },
+                onClick = {
+                    selectedMode = "marathlish"
+                    localCtx.getSharedPreferences("mhe_prefs", Context.MODE_PRIVATE).edit()
+                        .putString("selected_language", "Marathi").apply()
+                },
                 selectedGradient = listOf(AccentViolet, AccentIndigo),
                 modifier = Modifier.weight(1f)
             )
             LanguageChip(
                 label = "हिंदी  Hindi",
                 isSelected = selectedMode == "hinglish",
-                onClick = { selectedMode = "hinglish" },
+                onClick = {
+                    selectedMode = "hinglish"
+                    localCtx.getSharedPreferences("mhe_prefs", Context.MODE_PRIVATE).edit()
+                        .putString("selected_language", "Hindi").apply()
+                },
                 selectedGradient = listOf(AccentCyan, AccentEmerald),
                 modifier = Modifier.weight(1f)
             )
@@ -468,9 +420,9 @@ fun TranslatorSheet(
         Text("TRANSLATION PROVIDER", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MutedGray, letterSpacing = 1.5.sp, modifier = Modifier.padding(start = 4.dp))
         Spacer(modifier = Modifier.height(6.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ProviderOption("✦", "Gemini", "Online", provider == "gemini", AccentViolet, Modifier.weight(1f)) { provider = "gemini"; onProviderChanged("gemini") }
-            ProviderOption("Q", "Qwen", "Online", provider == "qwen", AccentCyan, Modifier.weight(1f)) { provider = "qwen"; onProviderChanged("qwen") }
-            ProviderOption("◌", "Offline", "On device", provider == "offline", AccentEmerald, Modifier.weight(1f)) { provider = "offline"; onProviderChanged("offline") }
+            ProviderOption("✦", "Gemini", "Online", provider == "gemini", AccentViolet, Modifier.weight(1f), isCompactWidth) { provider = "gemini"; onProviderChanged("gemini") }
+            ProviderOption("Q", "Qwen", "Online", provider == "qwen", AccentCyan, Modifier.weight(1f), isCompactWidth) { provider = "qwen"; onProviderChanged("qwen") }
+            ProviderOption("◌", "Offline", "On device", provider == "offline", AccentEmerald, Modifier.weight(1f), isCompactWidth) { provider = "offline"; onProviderChanged("offline") }
         }
         Text(
             text = when (provider) {
@@ -663,7 +615,7 @@ fun TranslatorSheet(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 200.dp)
+                .heightIn(min = if (isCompactWidth) 160.dp else 200.dp)
                 .border(
                     width = 1.dp,
                     brush = Brush.linearGradient(
@@ -682,7 +634,7 @@ fun TranslatorSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 180.dp)
+                    .heightIn(min = if (isCompactWidth) 140.dp else 180.dp)
                     .padding(16.dp)
             ) {
                 if (isLoading) {
@@ -794,9 +746,10 @@ fun TranslatorSheet(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        SelectionContainer {
-                            Text(text = dictionaryMeaning, style = MaterialTheme.typography.bodyMedium, color = SoftWhite, lineHeight = 22.sp)
-                        }
+                        DictionaryResult(
+                            text = dictionaryMeaning,
+                            accent = if (selectedMode == "marathlish") AccentViolet else AccentCyan
+                        )
                     }
                 }
             }
@@ -818,6 +771,42 @@ fun TranslatorSheet(
 
 
 @Composable
+private fun DictionaryResult(text: String, accent: Color) {
+    val lines = remember(text) {
+        text.lineSequence().map { rawLine ->
+            rawLine.trim()
+                .replace(Regex("""^#{1,6}\s*"""), "")
+                .replace("**", "")
+                .replace("__", "")
+                .replace("*", "")
+                .replace("#", "")
+                .replace("`", "")
+                .replace(Regex("""^[-+]\s+"""), "• ")
+        }.toList()
+    }
+
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            lines.forEach { line ->
+                if (line.isBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                } else {
+                    val isHeading = line.matches(Regex("""^\d+[.)]\s+.+""")) || line.endsWith(":")
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isHeading) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isHeading) accent else SoftWhite,
+                        lineHeight = 22.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
 private fun ProviderOption(
     icon: String,
     label: String,
@@ -825,21 +814,24 @@ private fun ProviderOption(
     selected: Boolean,
     accent: Color,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
     Column(
         modifier = modifier
-            .height(72.dp)
+            .height(if (compact) 56.dp else 72.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(if (selected) accent.copy(alpha = 0.18f) else CardDark)
             .border(1.dp, if (selected) accent.copy(alpha = 0.8f) else SubtleGray, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 7.dp else 9.dp),
         verticalArrangement = Arrangement.Center
     ) {
-        Text("$icon  $label", color = if (selected) SoftWhite else MutedGray, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(2.dp))
-        Text(caption, color = if (selected) accent else MutedGray, fontSize = 10.sp)
+        Text("$icon  $label", color = if (selected) SoftWhite else MutedGray, fontSize = if (compact) 11.sp else 13.sp, fontWeight = FontWeight.SemiBold)
+        if (!compact) {
+            Spacer(Modifier.height(2.dp))
+            Text(caption, color = if (selected) accent else MutedGray, fontSize = 10.sp)
+        }
     }
 }
 

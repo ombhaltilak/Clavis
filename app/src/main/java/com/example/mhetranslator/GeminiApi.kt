@@ -2,7 +2,6 @@ package com.example.mhetranslator
 
 import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,10 +26,7 @@ object GeminiApi {
 
     private data class Part(val text: String)
     private data class Content(val parts: List<Part>)
-    private data class GenerationConfig(
-        val temperature: Double,
-        @SerializedName("maxOutputTokens") val maxOutputTokens: Int
-    )
+    private data class GenerationConfig(val temperature: Double)
     private data class GenerateRequest(
         val contents: List<Content>,
         val generationConfig: GenerationConfig
@@ -44,7 +40,7 @@ object GeminiApi {
             val body = gson.toJson(
                 GenerateRequest(
                     contents = listOf(Content(listOf(Part(prompt)))),
-                    generationConfig = GenerationConfig(temperature = 0.2, maxOutputTokens = 2048)
+                    generationConfig = GenerationConfig(temperature = 0.2)
                 )
             ).toRequestBody(jsonMediaType)
             val url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent"
@@ -78,41 +74,42 @@ object GeminiApi {
         return HuggingFaceApi.generate(prompt)
     }
 
-    suspend fun translate(text: String, targetLanguage: String): String = OfflineTranslationApi.preserveEverydayEnglishScript(generateWithFallback(
-        """Translate the following text into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}—natural mixed Indian language, not plain $targetLanguage.
+    suspend fun translate(text: String, targetLanguage: String): String {
+        val protected = OfflineTranslationApi.protectEverydayEnglishTerms(text)
+        val translated = generateWithFallback(
+            """Translate the following text into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}—natural mixed Indian language, not plain $targetLanguage.
 Use natural everyday Indian speech, not a fixed language percentage. This is a strict script rule: every common daily-use English word MUST remain in English Latin letters, never Devanagari or a transliteration. For example write phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online — never फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Example: Railway station कहाँ है?
-For Hinglish, use natural Hindi for the remaining language; for Marathlish, use natural Marathi. Apply exactly the same Latin-script rule in both modes. Do not force either language merely to meet a ratio.
+For Hinglish, use natural Hindi for the remaining language and write every Hindi word in Devanagari. Never write romanized Hindi in Latin letters (for example, "se pehle", "kiye jaate hain", or "mujhe" are wrong); only the English terms remain in Latin script. For Marathlish, use natural Marathi in Devanagari for the remaining language. Apply exactly the same Latin-script rule in both modes. Do not force either language merely to meet a ratio.
 Preserve names, numbers, URLs, codes, and line breaks. Return only the translation.
+The input can contain protection tokens such as [[CLAVIS_KEEP_EN_0]]. Copy every token exactly, unchanged, in its original position. Do not translate, transliterate, remove, split, or add spaces inside a token.
 
-Text: $text"""
-    ))
+Text: ${protected.text}"""
+        )
+        return OfflineTranslationApi.preserveEverydayEnglishScript(protected.restore(translated))
+    }
 
     suspend fun translateLines(lines: List<String>, targetLanguage: String): List<String> {
         if (lines.isEmpty()) return emptyList()
-        val input = org.json.JSONArray(lines).toString()
+        val protectedLines = lines.map { OfflineTranslationApi.protectEverydayEnglishTerms(it) }
+        val input = org.json.JSONArray(protectedLines.map { it.text }).toString()
         val raw = generateWithFallback(
-            """Translate this JSON array into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}, not plain $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: write every common daily-use English word only in English Latin letters, never Devanagari/transliterated letters. Keep words such as phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online exactly in Latin script; never output forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Hinglish must use Hindi for the remaining language; Marathlish must use Marathi. Apply this same rule in both modes. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
-Return only a valid JSON array with the same number and order of strings.
+            """Translate this JSON array into ${if (targetLanguage == "Marathi") "Marathlish" else "Hinglish"}, not plain $targetLanguage. Use natural everyday Indian speech, not a fixed language percentage. Strict script rule: write every common daily-use English word only in English Latin letters, never Devanagari/transliterated letters. Keep words such as phone, ticket, station, office, meeting, message, time, school, market, doctor, problem, bus, train, app, screen, and online exactly in Latin script; never output forms such as फोन, टिकट, स्टेशन, ऑफिस, मीटिंग, मैसेज, टाइम, स्कूल, मार्केट, डॉक्टर, प्रॉब्लम, बस, ट्रेन, ऐप, स्क्रीन, or ऑनलाइन. Translate only words normally spoken in Hindi or Marathi. Hinglish must write every Hindi word in Devanagari, never romanized Hindi in Latin letters such as "se pehle" or "kiye jaate hain"; only English terms remain in Latin script. Marathlish must write Marathi in Devanagari for the remaining language. Apply this same rule in both modes. Do not force either language merely to meet a ratio. Return only a valid JSON array with the same number and order of strings.
+The input can contain protection tokens such as [[CLAVIS_KEEP_EN_0]]. Copy every token exactly, unchanged, in the same string and position. Do not translate, transliterate, remove, split, or add spaces inside a token.
 
 $input"""
         ).trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return try {
             val array = org.json.JSONArray(raw)
-            List(lines.size) { index -> OfflineTranslationApi.preserveEverydayEnglishScript(array.optString(index, lines[index])) }
+            List(lines.size) { index ->
+                OfflineTranslationApi.preserveEverydayEnglishScript(
+                    protectedLines[index].restore(array.optString(index, lines[index]))
+                )
+            }
         } catch (error: Exception) {
             Log.e(TAG, "Could not parse line translation response", error)
             lines
         }
     }
-
-    suspend fun classifyIntent(userText: String): String = generateWithFallback(
-        """You are Clavis, a voice assistant in a translation app.
-Return only one command: LIVE_TRANSLATE, STOP_TRANSLATE, CROP_TRANSLATE,
-CHANGE_LANG:Hindi, CHANGE_LANG:Marathi, DICTIONARY:word, OPEN_SETTINGS,
-or ANSWER: followed by one short answer.
-
-User: $userText"""
-    )
 
     suspend fun answer(question: String): String =
         generateWithFallback("Answer in one or two short sentences: $question")
